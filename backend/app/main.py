@@ -5,16 +5,25 @@ Run locally with:
     ./py.bat -m uvicorn app.main:app --reload --port 8000
 """
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.db.session import get_db, engine
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Runs once at startup (before yield) and once at shutdown (after yield)."""
     print(f"[startup] {settings.app_name} booting in env={settings.app_env}")
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        print("[startup] database connection OK")
+    except Exception as e:
+        print(f"[startup] WARNING: database not reachable: {e}")
     yield
     print("[shutdown] bye")
 
@@ -25,7 +34,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS: allow the future Vue dev server (Vite on port 5173) to call this API.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
@@ -39,3 +47,15 @@ app.add_middleware(
 async def health():
     """Liveness probe. Returns 200 if the process is up."""
     return {"status": "ok", "env": settings.app_env}
+
+
+@app.get("/health/db", tags=["meta"])
+async def health_db(db: Session = Depends(get_db)):
+    """Deep health check: verifies we can round-trip a query to Postgres."""
+    one = db.execute(text("SELECT 1")).scalar_one()
+    server_time = db.execute(text("SELECT NOW()")).scalar_one()
+    return {
+        "db": "ok",
+        "roundtrip": one,
+        "server_time": server_time.isoformat(),
+    }
