@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 from app.api.deps import require_tenant_role
 from app.core.device_auth import verify_device_signature
@@ -23,6 +24,7 @@ from app.schemas.sensor import (
     IngestAck,
     ReadingCreate,
     ReadingRead,
+    SummaryBucket,
     VALID_METRICS,
 )
 
@@ -134,3 +136,69 @@ def list_readings(
         .limit(min(limit, 5000))
         .all()
     )
+    # --- Summary (aggregated query) ----------------------------------------------
+
+
+ALLOWED_BUCKETS = {"1h": "sensor_1h", "6h": "sensor_6h"}
+ALLOWED_WINDOWS = {
+    "1h": "1 hour",
+    "6h": "6 hours",
+    "24h": "24 hours",
+    "7d": "7 days",
+    "30d": "30 days",
+    "90d": "90 days",
+}
+
+
+@router.get("/readings/summary", response_model=list[SummaryBucket])
+def summary_readings(
+    user: User = Depends(require_tenant_role(TenantRole.VIEWER)),
+    db: Session = Depends(get_db),
+    bucket: str = "1h",
+    window: str = "24h",
+    device_id: uuid.UUID | None = None,
+    plot_id: uuid.UUID | None = None,
+    metric: str | None = None,
+    limit: int = 500,
+):
+    """
+    Return pre-aggregated readings from a continuous aggregate view.
+
+    - bucket: '1h' or '6h' (which aggregate to query)
+    - window: how far back to look ('1h', '24h', '7d', '30d', '90d')
+    - All filters are optional.
+    """
+    if bucket not in ALLOWED_BUCKETS:
+        raise HTTPException(400, f"Invalid bucket. Allowed: {sorted(ALLOWED_BUCKETS)}")
+    if window not in ALLOWED_WINDOWS:
+        raise HTTPException(400, f"Invalid window. Allowed: {sorted(ALLOWED_WINDOWS)}")
+
+    view = ALLOWED_BUCKETS[bucket]
+    interval = ALLOWED_WINDOWS[window]
+
+    # Build a parameterized query. The view name and interval come from
+    # whitelists above — never interpolated from user input — so this is safe.
+    sql = f"""
+        SELECT bucket, device_id, metric,
+               avg_value, min_value, max_value, sample_count
+        FROM {view}
+        WHERE tenant_id = :tenant_id
+          AND bucket > NOW() - INTERVAL '{interval}'
+    """
+    params = {"tenant_id": str(user.tenant_id)}
+
+    if device_id is not None:
+        sql += " AND device_id = :device_id"
+        params["device_id"] = str(device_id)
+    if plot_id is not None:
+        sql += " AND plot_id = :plot_id"
+        params["plot_id"] = str(plot_id)
+    if metric is not None:
+        sql += " AND metric = :metric"
+        params["metric"] = metric
+
+    sql += " ORDER BY bucket DESC LIMIT :limit"
+    params["limit"] = min(limit, 5000)
+
+    rows = db.execute(text(sql), params).mappings().all()
+    return [dict(r) for r in rows]

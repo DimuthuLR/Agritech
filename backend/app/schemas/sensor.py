@@ -43,3 +43,13 @@ class IngestAck(BaseModel):
     """Terse success response for high-frequency ingest."""
     status: str = "accepted"
     time: datetime
+
+class SummaryBucket(BaseModel):
+    """One aggregated data point — used by the summary endpoint."""
+    bucket: datetime
+    device_id: uuid.UUID
+    metric: str
+    avg_value: float
+    min_value: float
+    max_value: float
+    sample_count: int
