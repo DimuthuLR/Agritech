@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.api.deps import require_tenant_role
 from app.core.device_auth import verify_device_signature
@@ -80,17 +81,21 @@ async def ingest_reading(request: Request, db: Session = Depends(get_db)):
 
     reading_time = payload.time or datetime.now(timezone.utc)
 
-    reading = SensorReading(
+    # INSERT ... ON CONFLICT DO NOTHING: a duplicate reading (same time,
+    # device, metric) is not an error — the reading is already recorded.
+    stmt = pg_insert(SensorReading).values(
         time=reading_time,
         device_id=device.id,
         metric=payload.metric,
         tenant_id=device.tenant_id,
         plot_id=device.plot_id,
         value=payload.value,
-    )
-    db.add(reading)
+    ).on_conflict_do_nothing()
 
-    # Update last_seen_at so the dashboard knows the device is alive.
+    db.execute(stmt)
+
+    # Update last_seen_at regardless — the device is alive even if the
+    # reading was a duplicate.
     device.last_seen_at = datetime.now(timezone.utc)
 
     db.commit()
