@@ -4,6 +4,7 @@ Alembic migration environment.
 This file configures Alembic to:
 1. Read the DB URL from our app settings (.env / config.py) — no duplicates.
 2. Discover our ORM models so autogenerate works.
+3. Ignore TimescaleDB-managed artifacts that aren't in our models.
 """
 from logging.config import fileConfig
 import sys
@@ -17,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.config import settings          # noqa: E402
 from app.db.base import Base                  # noqa: E402
-from app.db import models                     # noqa: F401,E402  (imports Farm, Plot)
+from app.db import models                     # noqa: F401,E402  (registers all models)
 
 
 # Alembic Config object — gives access to alembic.ini values.
@@ -34,6 +35,22 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+def include_object(obj, name, type_, reflected, compare_to):
+    """
+    Filter objects Alembic should consider during autogenerate.
+
+    Returns False to hide an object from Alembic's diff.
+    Currently excludes TimescaleDB-managed indexes on hypertables.
+    Timescale automatically creates an index named '<table>_time_idx'
+    on the partition column, which isn't in our SQLAlchemy models.
+    Without this filter, every autogenerate would try to drop/recreate it.
+    """
+    if type_ == "index" and name is not None:
+        if name.endswith("_time_idx"):
+            return False
+    return True
+
+
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode — emit SQL without a DB connection."""
     url = config.get_main_option("sqlalchemy.url")
@@ -43,6 +60,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -60,6 +78,7 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,
+            include_object=include_object,
         )
         with context.begin_transaction():
             context.run_migrations()

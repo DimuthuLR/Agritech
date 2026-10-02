@@ -44,6 +44,10 @@ class Device(Base):
         String(120), nullable=False, unique=True, index=True
     )
     firmware: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    
+    secret_key: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True, index=True
+    )
 
     # Operational state
     last_seen_at: Mapped[datetime | None] = mapped_column(
