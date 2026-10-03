@@ -26,10 +26,10 @@ log = logging.getLogger(__name__)
 # --- Configuration ----------------------------------------------------------
 
 OLLAMA_BASE_URL = "http://localhost:11434/v1"
-OLLAMA_API_KEY = "ollama"   # not validated by Ollama, but the client requires it
+OLLAMA_API_KEY = "ollama"
 MODEL_NAME = "phi4-mini"
 
-PROMPT_VERSION = "agent_llm@1"
+PROMPT_VERSION = "agent_llm@2"   # bumped: enriched_context replaces history_text
 MODEL_TAG = "phi4-mini"
 
 
@@ -45,7 +45,7 @@ def _get_client() -> OpenAI:
     return _client
 
 
-# --- Decision dataclass (matches mock) --------------------------------------
+# --- Decision dataclass ------------------------------------------------------
 
 @dataclass(frozen=True)
 class AgentDecision:
@@ -74,7 +74,7 @@ CHARACTER — follow these principles strictly:
 
 3. CONSISTENT
    The same situation should produce the same decision. Base your reasoning
-   on the state provided, not on speculation.
+   on the state and history provided, not on speculation.
 
 4. HUMBLE
    If sensor data is missing or stale (older than 30 minutes), or if you
@@ -144,12 +144,14 @@ def _format_context(ctx: SafetyContext) -> str:
 
 # --- Main entry point -------------------------------------------------------
 
-def decide(ctx: SafetyContext, history_text: str = "") -> AgentDecision:
+def decide(ctx: SafetyContext, enriched_context: str = "") -> AgentDecision:
     """
     Ask Phi-4-mini for a decision. Returns an AgentDecision.
 
-    `history_text` is optional recent-decisions context from agent_history.
-    If omitted, the model decides without memory of prior runs.
+    `enriched_context` is optional caller-composed text containing any
+    additional reasoning material — recent decisions (RAG), trend data,
+    domain knowledge. The caller formats it; this function includes it
+    verbatim in the prompt.
 
     On any failure (network, malformed JSON, unknown tool), returns a
     safe noop with an explanation. The agent loop never crashes because
@@ -157,20 +159,13 @@ def decide(ctx: SafetyContext, history_text: str = "") -> AgentDecision:
     """
     client = _get_client()
 
-    history_block = ""
-    if history_text:
-        history_block = (
-            "\n\nRECENT DECISIONS ON THIS PLOT (newest first):\n"
-            + history_text
-            + "\n\nUse this history to avoid repeating recent actions and to "
-            "spot patterns. If you irrigated recently, do not irrigate again "
-            "just because soil is dry — the water may not have reached the "
-            "sensor yet."
-        )
+    context_block = ""
+    if enriched_context:
+        context_block = "\n\n" + enriched_context
 
     user_prompt = (
         _format_context(ctx)
-        + history_block
+        + context_block
         + "\n\nDecide the next action. Respond with JSON only."
     )
 
@@ -183,7 +178,7 @@ def decide(ctx: SafetyContext, history_text: str = "") -> AgentDecision:
             ],
             response_format={"type": "json_object"},
             temperature=0.1,
-            max_tokens=400,
+            max_tokens=500,
         )
     except Exception as e:
         log.error(f"LLM call failed: {e}")
@@ -208,10 +203,7 @@ VALID_TOOLS = {
 
 
 def _parse_response(raw: str) -> AgentDecision:
-    """
-    Parse the model's JSON output into an AgentDecision.
-    Returns a safe noop on any problem.
-    """
+    """Parse the model's JSON output into an AgentDecision. Safe fallback on failure."""
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
