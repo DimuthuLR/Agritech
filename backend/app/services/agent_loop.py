@@ -24,7 +24,7 @@ from app.core.safety.gate import (
     SafetyViolation,
     validate_tool_call,
 )
-from app.services.agent_mock import AgentDecision, decide as mock_decide
+from app.services.agent_llm import AgentDecision, decide
 from app.services.context_builder import build_safety_context
 
 
@@ -58,7 +58,7 @@ def run_agent_for_plot(db: Session, plot_id: UUID) -> AgentRunResult:
     ctx = build_safety_context(db, plot_id)
 
     # --- 2. Get decision from the agent ---
-    decision: AgentDecision = mock_decide(ctx)
+    decision: AgentDecision = decide(ctx)
 
     decision_dict = {
         "tool": decision.tool,
@@ -86,8 +86,8 @@ def run_agent_for_plot(db: Session, plot_id: UUID) -> AgentRunResult:
             decision.args,
             db=db,
             actor="agent",
-            model="mock-v1",
-            prompt_version="agent_mock@1",
+            model="phi4-mini",
+            prompt_version="agent_llm@1",
         )
     except SafetyViolation as e:
         # The gate itself wrote an audit entry; get its id for the result.
