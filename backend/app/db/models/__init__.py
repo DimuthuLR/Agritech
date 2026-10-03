@@ -10,6 +10,8 @@ from app.db.models.plot import Plot
 from app.db.models.crop_batch import CropBatch
 from app.db.models.device import Device
 from app.db.models.sensor_reading import SensorReading
+from app.db.models.task import Task, TaskStatus
+from app.db.models.actuator_command import ActuatorCommand
 from app.db.models.audit_log import AuditLog
 
 __all__ = [
@@ -23,5 +25,8 @@ __all__ = [
     "CropBatch",
     "Device",
     "SensorReading",
+    "Task",
+    "TaskStatus",
+    "ActuatorCommand",
     "AuditLog",
 ]
