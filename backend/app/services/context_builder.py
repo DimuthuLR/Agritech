@@ -5,8 +5,8 @@ This is the boundary between the DB (reality) and the safety layer
 (pure logic). Everything the agent needs to decide is gathered here
 and frozen into an immutable SafetyContext.
 
-Weather is currently mocked (Phase 4f deferred). Swapping to a real
-API is a one-function change: _fetch_weather().
+Weather is now fetched live from Open-Meteo. Falls back to safe
+defaults if the API is unavailable.
 """
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
@@ -25,30 +25,7 @@ from app.core.safety.context import (
 from app.db.models.audit_log import AuditLog
 from app.db.models.plot import Plot
 from app.db.models.sensor_reading import SensorReading
-
-
-# ---------------------------------------------------------------------------
-# Weather (mock for now)
-# ---------------------------------------------------------------------------
-
-def _fetch_weather(plot: Plot) -> WeatherSnapshot:
-    """
-    Return current weather + 6h rain forecast for the plot.
-
-    MOCK: returns plausible Sri Lankan conditions. Replace this function
-    with a real Open-Meteo call in Phase 4f — the signature stays the same.
-
-    TODO: real integration — pass plot.latitude/longitude to Open-Meteo.
-    """
-    now = datetime.now(timezone.utc)
-    return WeatherSnapshot(
-        temp_c=28.5,
-        humidity=0.72,
-        wind_kmh=8.0,
-        rain_forecast_mm_6h=0.0,
-        fetched_at=now,
-        source="mock",
-    )
+from app.services.weather_history import fetch_current_weather
 
 
 # ---------------------------------------------------------------------------
@@ -59,12 +36,10 @@ def _fetch_sensors(db: Session, plot_id: UUID) -> SensorSnapshot:
     """
     Return the latest reading for each metric recorded on this plot.
     If nothing has ever been reported, returns an empty snapshot with
-    a very large age (indicating "no data").
+    a very large age (indicating 'no data').
     """
     now = datetime.now(timezone.utc)
 
-    # Get the latest reading per metric in one query.
-    # DISTINCT ON is Postgres-specific and fast with the PK index.
     rows = (
         db.query(SensorReading)
         .filter(SensorReading.plot_id == plot_id)
@@ -77,7 +52,6 @@ def _fetch_sensors(db: Session, plot_id: UUID) -> SensorSnapshot:
     )
 
     if not rows:
-        # No data at all — mark as very stale so the gate treats it as unusable.
         return SensorSnapshot(newest_reading_age_s=999_999.0)
 
     latest_by_metric = {r.metric: r for r in rows}
@@ -104,14 +78,8 @@ def _fetch_sensors(db: Session, plot_id: UUID) -> SensorSnapshot:
 
 def _fetch_irrigation_history(db: Session, plot_id: UUID) -> dict:
     """
-    Query audit_log for recent safety.passed irrigation decisions on
-    this plot. Used by the gate to enforce daily limits and minimum gaps.
-
-    Returns:
-        {
-            "last_irrigation_at": datetime | None,
-            "events_today": int,
-        }
+    Query audit_log for recent safety.passed irrigation decisions.
+    Used by the gate to enforce daily limits and minimum gaps.
     """
     since_24h = datetime.now(timezone.utc) - timedelta(hours=24)
 
@@ -127,7 +95,6 @@ def _fetch_irrigation_history(db: Session, plot_id: UUID) -> dict:
         .all()
     )
 
-    # Filter down to irrigation-tool events (payload is JSONB)
     irrigation_events = [
         e for e in passed
         if isinstance(e.payload, dict)
@@ -149,11 +116,6 @@ def _fetch_irrigation_history(db: Session, plot_id: UUID) -> dict:
 def build_safety_context(db: Session, plot_id: UUID) -> SafetyContext:
     """
     Assemble a SafetyContext for the given plot.
-
-    Raises HTTPException(404) if the plot doesn't exist.
-    Raises HTTPException(422) if required plot fields are missing
-    (crop, stage, soil_type) — the gate would fail closed anyway, but
-    failing here gives a clearer error.
     """
     plot = db.get(Plot, plot_id)
     if plot is None:
@@ -192,8 +154,8 @@ def build_safety_context(db: Session, plot_id: UUID) -> SafetyContext:
             detail=f"Unknown soil type {plot.soil_type!r}",
         )
 
-    # --- Gather real + mock data ---
-    weather = _fetch_weather(plot)
+    # --- Gather real + live data ---
+    weather = fetch_current_weather(plot.latitude, plot.longitude)
     sensors = _fetch_sensors(db, plot.id)
     history = _fetch_irrigation_history(db, plot.id)
 
@@ -203,11 +165,11 @@ def build_safety_context(db: Session, plot_id: UUID) -> SafetyContext:
         crop=plot.crop,
         stage=stage,
         soil_type=soil_type,
-        region=Region.LK,      # single-region for now
+        region=Region.LK,
         weather=weather,
         sensors=sensors,
         last_irrigation_at=history["last_irrigation_at"],
-        volume_today_L=0.0,              # not tracked yet; Phase 6
-        volume_today_per_ha_L=0.0,       # not tracked yet; Phase 6
+        volume_today_L=0.0,
+        volume_today_per_ha_L=0.0,
         irrigation_events_today=history["events_today"],
     )

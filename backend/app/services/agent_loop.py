@@ -2,17 +2,14 @@
 Agent loop — orchestrates one decision cycle for one plot.
 
 Flow:
-    1. Build SafetyContext (via context_builder)
-    2. Fetch recent decisions + trend (RAG + enrichment)
+    1. Build SafetyContext (via context_builder, with live weather)
+    2. Fetch recent decisions + trend + weather history
     3. Compose enriched_context string
-    4. Ask the agent for a decision (mock or LLM)
-    5. If the decision is 'noop', log and return
+    4. Ask the agent for a decision
+    5. If 'noop', log and return
     6. Otherwise, route through validate_tool_call()
     7. Log the outcome
     8. Return a structured result
-
-The agent's output is NEVER trusted. It is always validated by the gate.
-The agent is a proposer; the gate is the authority.
 """
 from dataclasses import dataclass
 from typing import Any
@@ -26,6 +23,7 @@ from app.core.safety.gate import (
     SafetyViolation,
     validate_tool_call,
 )
+from app.db.models.plot import Plot
 from app.services.agent_history import (
     fetch_recent_decisions,
     format_decisions_for_prompt,
@@ -36,11 +34,11 @@ from app.services.trends import (
     fetch_soil_moisture_trend,
     format_trend_for_prompt,
 )
+from app.services.weather_history import (
+    fetch_weather_history,
+    format_weather_history_for_prompt,
+)
 
-
-# ---------------------------------------------------------------------------
-# Result type
-# ---------------------------------------------------------------------------
 
 @dataclass
 class AgentRunResult:
@@ -56,14 +54,15 @@ class AgentRunResult:
 # Enriched context composition
 # ---------------------------------------------------------------------------
 
-def _build_enriched_context(db: Session, plot_id: UUID) -> str:
+def _build_enriched_context(db: Session, plot: Plot, plot_id: UUID) -> str:
     """
     Compose all reasoning context layers into one text block for the prompt.
 
     Layers:
-      1. Recent decisions (RAG) — with instruction about how to use them
+      1. Recent decisions (RAG)
       2. 7-day sensor trend
-      (future: weather history, domain knowledge, regional context)
+      3. 30-day weather history
+      (future: domain knowledge, regional context)
     """
     parts: list[str] = []
 
@@ -79,11 +78,17 @@ def _build_enriched_context(db: Session, plot_id: UUID) -> str:
               "reached the sensor yet."
         )
 
-    # --- Layer 2: 7-day trend ---
+    # --- Layer 2: 7-day sensor trend ---
     trend = fetch_soil_moisture_trend(db, plot_id, days=7)
     trend_text = format_trend_for_prompt(trend)
     if trend_text:
         parts.append(trend_text)
+
+    # --- Layer 3: 30-day weather history ---
+    wx_hist = fetch_weather_history(plot.latitude, plot.longitude, days=30)
+    wx_text = format_weather_history_for_prompt(wx_hist)
+    if wx_text:
+        parts.append(wx_text)
 
     return "\n\n".join(parts)
 
@@ -95,18 +100,20 @@ def _build_enriched_context(db: Session, plot_id: UUID) -> str:
 def run_agent_for_plot(db: Session, plot_id: UUID) -> AgentRunResult:
     """
     Run one decision cycle for a plot.
-
-    Never raises SafetyViolation — the gate's refusal is a valid
-    outcome that we record and return, not an error.
+    Never raises SafetyViolation — refusals are recorded, not errors.
     """
     # --- 1. Build safety context ---
     ctx = build_safety_context(db, plot_id)
 
-    # --- 2. Compose enriched context (RAG + trend) ---
-    enriched = _build_enriched_context(db, plot_id)
-    history_count = enriched.count("—") if enriched else 0  # rough proxy; ok for now
+    # --- 2. Load plot for coordinates (needed for weather history) ---
+    plot = db.get(Plot, plot_id)
+    if plot is None:
+        raise RuntimeError("Plot disappeared between context build and loop")
 
-    # --- 3. Ask the agent ---
+    # --- 3. Compose enriched context ---
+    enriched = _build_enriched_context(db, plot, plot_id)
+
+    # --- 4. Ask the agent ---
     decision: AgentDecision = decide(ctx, enriched)
 
     decision_dict = {
@@ -115,7 +122,7 @@ def run_agent_for_plot(db: Session, plot_id: UUID) -> AgentRunResult:
         "reason": decision.reason,
     }
 
-    # --- 4. Handle noop ---
+    # --- 5. Handle noop ---
     if decision.tool == "noop":
         audit_id = _log_noop(db, ctx, decision)
         return AgentRunResult(
@@ -127,7 +134,7 @@ def run_agent_for_plot(db: Session, plot_id: UUID) -> AgentRunResult:
             audit_id=audit_id,
         )
 
-    # --- 5. Validate through the gate ---
+    # --- 6. Validate through the gate ---
     try:
         validated = validate_tool_call(
             ctx,
@@ -136,7 +143,7 @@ def run_agent_for_plot(db: Session, plot_id: UUID) -> AgentRunResult:
             db=db,
             actor="agent",
             model="phi4-mini",
-            prompt_version="agent_llm@2",
+            prompt_version="agent_llm@3",
         )
     except SafetyViolation as e:
         from app.db.models.audit_log import AuditLog
@@ -150,7 +157,7 @@ def run_agent_for_plot(db: Session, plot_id: UUID) -> AgentRunResult:
             audit_id=last_audit.id if last_audit else None,
         )
 
-    # --- 6. Validated — record the agent's intent ---
+    # --- 7. Validated — record intent ---
     entry = write_audit(
         db,
         kind="agent.executed",
@@ -159,13 +166,14 @@ def run_agent_for_plot(db: Session, plot_id: UUID) -> AgentRunResult:
             "args": validated,
             "reason": decision.reason,
             "enriched_context_chars": len(enriched),
+            "weather_source": ctx.weather.source,
         },
         actor="agent",
         tenant_id=ctx.tenant_id,
         target_type="plot",
         target_id=str(ctx.plot_id),
         model="phi4-mini",
-        prompt_version="agent_llm@2",
+        prompt_version="agent_llm@3",
     )
     db.commit()
 
@@ -193,6 +201,7 @@ def _summarize(ctx: SafetyContext) -> dict[str, Any]:
             "temp_c": ctx.weather.temp_c,
             "wind_kmh": ctx.weather.wind_kmh,
             "rain_forecast_mm_6h": ctx.weather.rain_forecast_mm_6h,
+            "source": ctx.weather.source,
         },
         "sensors": {
             "soil_moisture": ctx.sensors.soil_moisture,
@@ -223,7 +232,7 @@ def _log_noop(
         target_type="plot",
         target_id=str(ctx.plot_id),
         model="phi4-mini",
-        prompt_version="agent_llm@2",
+        prompt_version="agent_llm@3",
     )
     db.commit()
     return entry.id
