@@ -207,3 +207,42 @@ def test_max_events_per_day_enforced(db):
         validate_tool_call(ctx, "control_irrigation", args, db=db)
 
     assert "times today" in str(exc.value) or "per 24h" in str(exc.value)
+
+    # ---------------------------------------------------------------------------
+# 10. Stale sensor data → gate refuses (even if the model proposed action)
+# ---------------------------------------------------------------------------
+
+def test_stale_sensor_blocks_irrigation(db):
+    """
+    Even if the agent ignores staleness, the gate refuses to act on data
+    older than 30 minutes for irrigation.
+    """
+    ctx = _ctx(
+        crop="tomato",
+        stage=GrowthStage.VEGETATIVE,
+        irrigation_events_today=0,
+    )
+    # Override the sensor age to 45 minutes (2700s) — past the 30-min threshold
+    ctx_with_stale = SafetyContext(
+        plot_id=ctx.plot_id,
+        tenant_id=ctx.tenant_id,
+        crop=ctx.crop,
+        stage=ctx.stage,
+        soil_type=ctx.soil_type,
+        region=ctx.region,
+        weather=ctx.weather,
+        sensors=SensorSnapshot(
+            soil_moisture=0.20,              # soil IS dry
+            newest_reading_age_s=2700.0,     # but data is 45 min old
+        ),
+        last_irrigation_at=ctx.last_irrigation_at,
+        volume_today_L=0.0,
+        volume_today_per_ha_L=0.0,
+        irrigation_events_today=0,
+    )
+    args = {"duration_min": 5}
+
+    with pytest.raises(SafetyViolation) as exc:
+        validate_tool_call(ctx_with_stale, "control_irrigation", args, db=db)
+
+    assert "stale" in str(exc.value).lower() or "sensor data is" in str(exc.value)

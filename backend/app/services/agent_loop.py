@@ -3,16 +3,17 @@ Agent loop — orchestrates one decision cycle for one plot.
 
 Flow:
     1. Build SafetyContext (via context_builder)
-    2. Ask the agent for a decision (mock now, LLM in Phase 5b)
-    3. If the decision is 'noop', log and return
-    4. Otherwise, route through validate_tool_call()
-    5. Log the outcome (passed / violated / weather-suppressed)
-    6. Return a structured result
+    2. Fetch recent decisions for RAG (via agent_history)
+    3. Ask the agent for a decision (mock or LLM)
+    4. If the decision is 'noop', log and return
+    5. Otherwise, route through validate_tool_call()
+    6. Log the outcome (passed / violated / weather-suppressed)
+    7. Return a structured result
 
 The agent's output is NEVER trusted. It is always validated by the gate.
 The agent is a proposer; the gate is the authority.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -23,6 +24,10 @@ from app.core.safety.context import SafetyContext
 from app.core.safety.gate import (
     SafetyViolation,
     validate_tool_call,
+)
+from app.services.agent_history import (
+    fetch_recent_decisions,
+    format_decisions_for_prompt,
 )
 from app.services.agent_llm import AgentDecision, decide
 from app.services.context_builder import build_safety_context
@@ -37,8 +42,8 @@ class AgentRunResult:
     """Outcome of one agent decision cycle."""
     plot_id: UUID
     context_summary: dict[str, Any]
-    decision: dict[str, Any]           # {tool, args, reason}
-    validation: dict[str, Any]         # {status: 'passed'|'violation'|'noop', reason?: str}
+    decision: dict[str, Any]
+    validation: dict[str, Any]
     would_execute: bool
     audit_id: int | None = None
 
@@ -57,8 +62,12 @@ def run_agent_for_plot(db: Session, plot_id: UUID) -> AgentRunResult:
     # --- 1. Build context ---
     ctx = build_safety_context(db, plot_id)
 
-    # --- 2. Get decision from the agent ---
-    decision: AgentDecision = decide(ctx)
+    # --- 2. Fetch recent decisions for RAG ---
+    history = fetch_recent_decisions(db, plot_id, limit=10)
+    history_text = format_decisions_for_prompt(history)
+
+    # --- 3. Get decision from the agent (with history) ---
+    decision: AgentDecision = decide(ctx, history_text)
 
     decision_dict = {
         "tool": decision.tool,
@@ -66,9 +75,9 @@ def run_agent_for_plot(db: Session, plot_id: UUID) -> AgentRunResult:
         "reason": decision.reason,
     }
 
-    # --- 3. Handle noop ---
+    # --- 4. Handle noop ---
     if decision.tool == "noop":
-        audit_id = _log_noop(db, ctx, decision)
+        audit_id = _log_noop(db, ctx, decision, len(history))
         return AgentRunResult(
             plot_id=plot_id,
             context_summary=_summarize(ctx),
@@ -78,7 +87,7 @@ def run_agent_for_plot(db: Session, plot_id: UUID) -> AgentRunResult:
             audit_id=audit_id,
         )
 
-    # --- 4. Validate through the gate ---
+    # --- 5. Validate through the gate ---
     try:
         validated = validate_tool_call(
             ctx,
@@ -90,12 +99,9 @@ def run_agent_for_plot(db: Session, plot_id: UUID) -> AgentRunResult:
             prompt_version="agent_llm@1",
         )
     except SafetyViolation as e:
-        # The gate itself wrote an audit entry; get its id for the result.
-        last_audit = (
-            db.query(__import__("app.db.models.audit_log", fromlist=["AuditLog"]).AuditLog)
-            .order_by(__import__("app.db.models.audit_log", fromlist=["AuditLog"]).AuditLog.id.desc())
-            .first()
-        )
+        # The gate already wrote an audit entry; fetch its id.
+        from app.db.models.audit_log import AuditLog
+        last_audit = db.query(AuditLog).order_by(AuditLog.id.desc()).first()
         return AgentRunResult(
             plot_id=plot_id,
             context_summary=_summarize(ctx),
@@ -105,9 +111,7 @@ def run_agent_for_plot(db: Session, plot_id: UUID) -> AgentRunResult:
             audit_id=last_audit.id if last_audit else None,
         )
 
-    # --- 5. Validated — write the agent's intent to the audit log ---
-    # (The gate already wrote 'safety.passed'; this is the 'agent.executed'
-    # entry that Phase 6's dispatcher will consume when it's built.)
+    # --- 6. Validated — write the agent's intent to the audit log ---
     entry = write_audit(
         db,
         kind="agent.executed",
@@ -115,13 +119,14 @@ def run_agent_for_plot(db: Session, plot_id: UUID) -> AgentRunResult:
             "tool": decision.tool,
             "args": validated,
             "reason": decision.reason,
+            "history_size": len(history),
         },
         actor="agent",
         tenant_id=ctx.tenant_id,
         target_type="plot",
         target_id=str(ctx.plot_id),
-        model="mock-v1",
-        prompt_version="agent_mock@1",
+        model="phi4-mini",
+        prompt_version="agent_llm@1",
     )
     db.commit()
 
@@ -164,18 +169,26 @@ def _summarize(ctx: SafetyContext) -> dict[str, Any]:
     }
 
 
-def _log_noop(db: Session, ctx: SafetyContext, decision: AgentDecision) -> int | None:
+def _log_noop(
+    db: Session,
+    ctx: SafetyContext,
+    decision: AgentDecision,
+    history_size: int,
+) -> int | None:
     """Record an agent 'no action' decision in the audit log."""
     entry = write_audit(
         db,
         kind="agent.noop",
-        payload={"reason": decision.reason},
+        payload={
+            "reason": decision.reason,
+            "history_size": history_size,
+        },
         actor="agent",
         tenant_id=ctx.tenant_id,
         target_type="plot",
         target_id=str(ctx.plot_id),
-        model="mock-v1",
-        prompt_version="agent_mock@1",
+        model="phi4-mini",
+        prompt_version="agent_llm@1",
     )
     db.commit()
     return entry.id

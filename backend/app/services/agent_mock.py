@@ -39,10 +39,13 @@ MOCK_SOIL_MOISTURE_TARGET = 0.40    # roughly "good moisture"
 MOCK_PULSE_MINUTES = 3
 
 
-def decide(ctx: SafetyContext) -> AgentDecision:
+def decide(ctx: SafetyContext, history_text: str = "") -> AgentDecision:
     """
     Mock decision logic. Returns an AgentDecision regardless of whether
     the decision would pass the gate — the gate decides that.
+
+    `history_text` is accepted for signature compatibility with agent_llm
+    but ignored — the mock's logic is deterministic and doesn't need memory.
     """
     sm = ctx.sensors.soil_moisture
 

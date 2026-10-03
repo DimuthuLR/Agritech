@@ -144,18 +144,34 @@ def _format_context(ctx: SafetyContext) -> str:
 
 # --- Main entry point -------------------------------------------------------
 
-def decide(ctx: SafetyContext) -> AgentDecision:
+def decide(ctx: SafetyContext, history_text: str = "") -> AgentDecision:
     """
     Ask Phi-4-mini for a decision. Returns an AgentDecision.
+
+    `history_text` is optional recent-decisions context from agent_history.
+    If omitted, the model decides without memory of prior runs.
 
     On any failure (network, malformed JSON, unknown tool), returns a
     safe noop with an explanation. The agent loop never crashes because
     the model misbehaved.
     """
     client = _get_client()
+
+    history_block = ""
+    if history_text:
+        history_block = (
+            "\n\nRECENT DECISIONS ON THIS PLOT (newest first):\n"
+            + history_text
+            + "\n\nUse this history to avoid repeating recent actions and to "
+            "spot patterns. If you irrigated recently, do not irrigate again "
+            "just because soil is dry — the water may not have reached the "
+            "sensor yet."
+        )
+
     user_prompt = (
         _format_context(ctx)
-        + "\nDecide the next action. Respond with JSON only."
+        + history_block
+        + "\n\nDecide the next action. Respond with JSON only."
     )
 
     try:
@@ -166,7 +182,7 @@ def decide(ctx: SafetyContext) -> AgentDecision:
                 {"role": "user", "content": user_prompt},
             ],
             response_format={"type": "json_object"},
-            temperature=0.1,       # low = consistent decisions
+            temperature=0.1,
             max_tokens=400,
         )
     except Exception as e:
