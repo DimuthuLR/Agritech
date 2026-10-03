@@ -78,34 +78,42 @@ def _fetch_sensors(db: Session, plot_id: UUID) -> SensorSnapshot:
 
 def _fetch_irrigation_history(db: Session, plot_id: UUID) -> dict:
     """
-    Query audit_log for recent safety.passed irrigation decisions.
-    Used by the gate to enforce daily limits and minimum gaps.
+    Query the tasks table for recent DISPATCHED irrigation events.
+
+    Why tasks and not audit_log:
+        safety.passed audit entries mean "the gate approved a proposal",
+        which happens BEFORE dispatch and might never result in a
+        real irrigation. We want actual commanded irrigations — those
+        live in tasks with status >= DISPATCHED.
+
+    Returns:
+        {"last_irrigation_at": datetime | None, "events_today": int}
     """
+    from app.db.models.task import Task, TaskStatus
+
     since_24h = datetime.now(timezone.utc) - timedelta(hours=24)
 
-    passed = (
-        db.query(AuditLog)
+    dispatched = (
+        db.query(Task)
         .filter(
-            AuditLog.target_type == "plot",
-            AuditLog.target_id == str(plot_id),
-            AuditLog.kind == "safety.passed",
-            AuditLog.occurred_at >= since_24h,
+            Task.plot_id == plot_id,
+            Task.tool == "control_irrigation",
+            Task.status.in_([
+                TaskStatus.DISPATCHED,
+                TaskStatus.ACKED,
+                TaskStatus.DONE,
+            ]),
+            Task.dispatched_at >= since_24h,
         )
-        .order_by(AuditLog.occurred_at.desc())
+        .order_by(Task.dispatched_at.desc())
         .all()
     )
 
-    irrigation_events = [
-        e for e in passed
-        if isinstance(e.payload, dict)
-        and e.payload.get("tool") == "control_irrigation"
-    ]
-
-    last_at = irrigation_events[0].occurred_at if irrigation_events else None
+    last_at = dispatched[0].dispatched_at if dispatched else None
 
     return {
         "last_irrigation_at": last_at,
-        "events_today": len(irrigation_events),
+        "events_today": len(dispatched),
     }
 
 
