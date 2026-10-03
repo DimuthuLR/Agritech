@@ -27,11 +27,10 @@ log = logging.getLogger(__name__)
 
 OLLAMA_BASE_URL = "http://localhost:11434/v1"
 OLLAMA_API_KEY = "ollama"
-MODEL_NAME = "phi4-mini"
+MODEL_NAME = "qwen2.5:7b-instruct-q4_K_M"
 
-PROMPT_VERSION = "agent_llm@2"   # bumped: enriched_context replaces history_text
-MODEL_TAG = "phi4-mini"
-
+PROMPT_VERSION = "agent_llm@6"   # bumped: enriched_context replaces history_text
+MODEL_TAG = "qwen2.5-7b"
 
 # --- Client (singleton) ------------------------------------------------------
 
@@ -66,6 +65,14 @@ CHARACTER — follow these principles strictly:
    If uncertain, do less. Never propose more water, nutrients, or chemicals
    than clearly needed. Under-irrigation is a recoverable problem; over-
    irrigation causes root rot, nutrient leaching, and crop loss.
+
+   BUT: conservative does not mean passive. If soil moisture is CLEARLY
+   below the target range for the crop and stage, act — a small pulse is
+   the correct choice. Do not let a favorable 30-day trend override a
+   clearly dry current reading. The 30-day trend tells you whether the
+   soil has deep reserves; the current reading tells you what the plant
+   needs right now. When they conflict and the reading is clearly low,
+   trust the reading.
 
 2. TRANSPARENT
    Every decision must include a one-sentence reason in plain English that
@@ -116,9 +123,41 @@ Respond with a single JSON object. No prose outside the JSON.
 
 def _format_context(ctx: SafetyContext) -> str:
     """Render the SafetyContext as a compact text block for the prompt."""
+    from app.core.safety.limits_matrix import get_limits
+
     sm = ctx.sensors.soil_moisture
     sm_str = f"{sm:.3f}" if sm is not None else "no data"
     age_min = ctx.sensors.newest_reading_age_s / 60.0
+
+    # Provide the target range so the model has an explicit reference.
+    limits = get_limits(ctx.crop, ctx.stage, ctx.soil_type, ctx.region)
+    if limits is not None:
+        tmin = limits.target_soil_moisture_min
+        tmax = limits.target_soil_moisture_max
+        if sm is None:
+            verdict = "no reading"
+        elif sm < tmin:
+            verdict = f"BELOW target (deficit {tmin - sm:.3f})"
+        elif sm > tmax:
+            verdict = f"ABOVE target (excess {sm - tmax:.3f})"
+        else:
+            verdict = "WITHIN target"
+
+        target_line = (
+            f"    Target range for {ctx.crop} ({ctx.stage.value}): "
+            f"{tmin:.2f} – {tmax:.2f}\n"
+            f"    Verdict: {verdict}"
+        )
+        bounds_line = (
+            f"\n  Operating envelope (safety limits — proposals outside this range will be rejected):\n"
+            f"    Max duration per irrigation event: {limits.max_minutes_per_event} minutes\n"
+            f"    Max events per 24h: {limits.max_events_per_day}\n"
+            f"    Minimum gap between events: {limits.min_minutes_between} minutes\n"
+            f"    Max daily water budget: {limits.max_daily_L_per_ha:.0f} L/ha"
+        )
+    else:
+        target_line = "    Target range: (not configured for this crop/stage)"
+        bounds_line = ""
 
     return f"""CURRENT PLOT STATE:
 
@@ -134,13 +173,14 @@ def _format_context(ctx: SafetyContext) -> str:
 
   Sensors (latest):
     Soil moisture: {sm_str} (0.0 = bone dry, 1.0 = saturated)
+{target_line}
     Sensor age: {age_min:.0f} minutes
+{bounds_line}
 
   Recent irrigation history:
     Events in last 24h: {ctx.irrigation_events_today}
     Last irrigation: {ctx.last_irrigation_at.isoformat() if ctx.last_irrigation_at else "never"}
 """
-
 
 # --- Main entry point -------------------------------------------------------
 

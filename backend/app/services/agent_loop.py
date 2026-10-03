@@ -3,13 +3,17 @@ Agent loop — orchestrates one decision cycle for one plot.
 
 Flow:
     1. Build SafetyContext (via context_builder, with live weather)
-    2. Fetch recent decisions + trend + weather history
+    2. Fetch recent decisions + trend + weather history + agronomy
     3. Compose enriched_context string
     4. Ask the agent for a decision
     5. If 'noop', log and return
     6. Otherwise, route through validate_tool_call()
-    7. Log the outcome
-    8. Return a structured result
+    7. Write the agent.executed audit entry
+    8. Create a Task from the decision (via task_service)
+    9. Return a structured result including the task
+
+The agent's output is NEVER trusted. It is always validated by the gate.
+The agent is a proposer; the gate is the authority; the task is the record.
 """
 from dataclasses import dataclass
 from typing import Any
@@ -24,17 +28,24 @@ from app.core.safety.gate import (
     validate_tool_call,
 )
 from app.db.models.plot import Plot
+from app.db.models.task import Task
 from app.services.agent_history import (
     fetch_recent_decisions,
     format_decisions_for_prompt,
 )
 from app.services.agent_llm import AgentDecision, decide
+from app.services.agronomy import (
+    compute_agronomic_summary,
+    format_agronomy_for_prompt,
+)
 from app.services.context_builder import build_safety_context
+from app.services.task_service import create_task_from_agent
 from app.services.trends import (
     fetch_soil_moisture_trend,
     format_trend_for_prompt,
 )
 from app.services.weather_history import (
+    DEFAULT_LAT,
     fetch_weather_history,
     format_weather_history_for_prompt,
 )
@@ -48,6 +59,8 @@ class AgentRunResult:
     validation: dict[str, Any]
     would_execute: bool
     audit_id: int | None = None
+    task_id: UUID | None = None
+    task_status: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -55,18 +68,10 @@ class AgentRunResult:
 # ---------------------------------------------------------------------------
 
 def _build_enriched_context(db: Session, plot: Plot, plot_id: UUID) -> str:
-    """
-    Compose all reasoning context layers into one text block for the prompt.
-
-    Layers:
-      1. Recent decisions (RAG)
-      2. 7-day sensor trend
-      3. 30-day weather history
-      (future: domain knowledge, regional context)
-    """
+    """Compose all reasoning context layers into one text block."""
     parts: list[str] = []
 
-    # --- Layer 1: recent decisions ---
+    # Layer 1: recent decisions (RAG)
     recent = fetch_recent_decisions(db, plot_id, limit=10)
     history_text = format_decisions_for_prompt(recent)
     if history_text:
@@ -78,17 +83,25 @@ def _build_enriched_context(db: Session, plot: Plot, plot_id: UUID) -> str:
               "reached the sensor yet."
         )
 
-    # --- Layer 2: 7-day sensor trend ---
+    # Layer 2: 7-day sensor trend
     trend = fetch_soil_moisture_trend(db, plot_id, days=7)
     trend_text = format_trend_for_prompt(trend)
     if trend_text:
         parts.append(trend_text)
 
-    # --- Layer 3: 30-day weather history ---
+    # Layer 3: 30-day weather history
     wx_hist = fetch_weather_history(plot.latitude, plot.longitude, days=30)
     wx_text = format_weather_history_for_prompt(wx_hist)
     if wx_text:
         parts.append(wx_text)
+
+    # Layer 4: agronomic calculations
+    if wx_hist and wx_hist.daily:
+        lat = plot.latitude if plot.latitude is not None else DEFAULT_LAT
+        agronomy = compute_agronomic_summary(wx_hist.daily, lat, plot.crop or "")
+        agro_text = format_agronomy_for_prompt(agronomy)
+        if agro_text:
+            parts.append(agro_text)
 
     return "\n\n".join(parts)
 
@@ -98,14 +111,11 @@ def _build_enriched_context(db: Session, plot: Plot, plot_id: UUID) -> str:
 # ---------------------------------------------------------------------------
 
 def run_agent_for_plot(db: Session, plot_id: UUID) -> AgentRunResult:
-    """
-    Run one decision cycle for a plot.
-    Never raises SafetyViolation — refusals are recorded, not errors.
-    """
+    """Run one decision cycle for a plot."""
     # --- 1. Build safety context ---
     ctx = build_safety_context(db, plot_id)
 
-    # --- 2. Load plot for coordinates (needed for weather history) ---
+    # --- 2. Load plot for coordinates ---
     plot = db.get(Plot, plot_id)
     if plot is None:
         raise RuntimeError("Plot disappeared between context build and loop")
@@ -157,7 +167,7 @@ def run_agent_for_plot(db: Session, plot_id: UUID) -> AgentRunResult:
             audit_id=last_audit.id if last_audit else None,
         )
 
-    # --- 7. Validated — record intent ---
+    # --- 7. Write the agent.executed audit entry ---
     entry = write_audit(
         db,
         kind="agent.executed",
@@ -176,14 +186,34 @@ def run_agent_for_plot(db: Session, plot_id: UUID) -> AgentRunResult:
         prompt_version="agent_llm@3",
     )
     db.commit()
+    db.refresh(entry)
+
+    # --- 8. Create a Task from the decision ---
+    requires_approval = validated.get("_requires_approval", False)
+
+    # Strip our internal marker from the args before persisting.
+    task_args = {k: v for k, v in validated.items() if not k.startswith("_")}
+
+    task: Task = create_task_from_agent(
+        db,
+        ctx,
+        decision_tool=decision.tool,
+        decision_args=task_args,
+        decision_reason=decision.reason,
+        requires_approval=requires_approval,
+        source_audit_id=entry.id,
+        device_id=None,   # Phase 6d will resolve the target actuator
+    )
 
     return AgentRunResult(
         plot_id=plot_id,
         context_summary=_summarize(ctx),
         decision=decision_dict,
-        validation={"status": "passed"},
+        validation={"status": "passed", "requires_approval": requires_approval},
         would_execute=True,
         audit_id=entry.id,
+        task_id=task.id,
+        task_status=task.status.value,
     )
 
 

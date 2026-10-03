@@ -79,6 +79,8 @@ class Limits:
     max_fertigation_ec: float
     max_chem_dose_ml_per_ha: float
     max_chem_apps_per_week: int
+    target_soil_moisture_min: float = 0.30    # below this → irrigate
+    target_soil_moisture_max: float = 0.50    # above this → don't irrigate
     notes: str = ""
 
     def apply_soil(self, modifier: "SoilModifier") -> "Limits":
@@ -96,12 +98,13 @@ class Limits:
             max_daily_L_per_ha=round(
                 self.max_daily_L_per_ha * modifier.daily_multiplier, 1
             ),
-            max_fertigation_ec=self.max_fertigation_ec,   # not soil-dependent
+            max_fertigation_ec=self.max_fertigation_ec,
             max_chem_dose_ml_per_ha=self.max_chem_dose_ml_per_ha,
             max_chem_apps_per_week=self.max_chem_apps_per_week,
+            target_soil_moisture_min=self.target_soil_moisture_min,
+            target_soil_moisture_max=self.target_soil_moisture_max,
             notes=self.notes,
         )
-
 
 @dataclass(frozen=True)
 class SoilModifier:

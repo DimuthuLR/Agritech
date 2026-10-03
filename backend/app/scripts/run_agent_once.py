@@ -2,7 +2,7 @@
 Run the agent on a single plot for testing.
 
 Usage:
-    ./py.bat -m app.scripts.run_agent_once --plot 0bc335dd-1edb-41b3-9f3b-a481a6520f3b
+    ./py.bat -m app.scripts.run_agent_once --plot 0bc335dd-...
 """
 import argparse
 import json
@@ -30,7 +30,7 @@ def main() -> int:
 
     db = SessionLocal()
     try:
-        _print_section(1, 5, "Loading plot and building context...")
+        _print_section(1, 6, "Loading plot and building context...")
         result = run_agent_for_plot(db, plot_id)
 
         ctx = result.context_summary
@@ -38,18 +38,19 @@ def main() -> int:
               f"soil={ctx['soil_type']}")
         print(f"      weather: {ctx['weather']['temp_c']}°C, "
               f"{ctx['weather']['wind_kmh']}km/h wind, "
-              f"{ctx['weather']['rain_forecast_mm_6h']}mm rain")
+              f"{ctx['weather']['rain_forecast_mm_6h']}mm rain "
+              f"({ctx['weather']['source']})")
         print(f"      sensors: soil_moisture={ctx['sensors']['soil_moisture']} "
               f"({ctx['sensors']['newest_reading_age_s']}s old)")
         print(f"      history: {ctx['history']['events_today']} events today, "
               f"last at {ctx['history']['last_irrigation_at']}")
 
-        _print_section(2, 5, "Agent decision...")
+        _print_section(2, 6, "Agent decision...")
         print(f"      tool: {result.decision['tool']}")
         print(f"      args: {json.dumps(result.decision['args'])}")
         print(f"      reason: {result.decision['reason']}")
 
-        _print_section(3, 5, "Validation through safety gate...")
+        _print_section(3, 6, "Validation through safety gate...")
         status = result.validation["status"]
         if status == "passed":
             print(f"      ✅ PASSED")
@@ -58,15 +59,26 @@ def main() -> int:
         else:
             print(f"      ❌ {status.upper()}: {result.validation.get('reason')}")
 
-        _print_section(4, 5, "Execution...")
-        if result.would_execute:
-            print(f"      Would dispatch: {result.decision['tool']}"
-                  f"({json.dumps(result.decision['args'])})")
-            print(f"      (Real dispatch is Phase 6.)")
+        _print_section(4, 6, "Task creation...")
+        if result.task_id:
+            print(f"      Task created: {result.task_id}")
+            print(f"      Status: {result.task_status}")
+            if result.validation.get("requires_approval"):
+                print(f"      ⏳ Requires human approval")
+            else:
+                print(f"      ✅ Ready to dispatch (no approval needed)")
+        else:
+            print(f"      No task created.")
+
+        _print_section(5, 6, "Execution...")
+        if result.would_execute and not result.validation.get("requires_approval"):
+            print(f"      (Real dispatch is Phase 6d.)")
+        elif result.validation.get("requires_approval"):
+            print(f"      Waiting for human approval before dispatch.")
         else:
             print(f"      No dispatch.")
 
-        _print_section(5, 5, "Audit log...")
+        _print_section(6, 6, "Audit log...")
         print(f"      audit_id={result.audit_id}")
 
         return 0
