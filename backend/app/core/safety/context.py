@@ -24,6 +24,27 @@ class Region(str, Enum):
     US = "US"       # United States (generic)
     OTHER = "OTHER"
 
+class SoilType(str, Enum):
+    """
+    Soil type or growing medium. Set by the user at plot creation.
+
+    Natural soils use Sri Lanka Department of Agriculture classification.
+    Growing media are the common substrates for poly-tunnel/greenhouse work.
+    """
+    # Natural soils (Sri Lanka)
+    RED_YELLOW_PODZOLIC = "red_yellow_podzolic"      # wet zone, tea/rubber country
+    REDDISH_BROWN_EARTH = "reddish_brown_earth"      # dry zone, most vegetable cultivation
+    LOW_HUMIC_GLEY = "low_humic_gley"                # lowland, poor drainage
+    REGOSOLS = "regosols"                            # coastal sands, coconut triangle
+    IMMATURE_BROWN_LOAM = "immature_brown_loam"      # hill country, Nuwara Eliya
+
+    # Growing media (poly-tunnel / greenhouse)
+    COCO_PEAT = "coco_peat"                          # very common in Sri Lanka
+    SOIL_BASED_MIX = "soil_based_mix"                # field soil + amendments
+    COMPOST_MIX = "compost_mix"
+
+    # Fallback
+    OTHER = "other"                                  # unknown; system uses conservative defaults
 
 class GrowthStage(str, Enum):
     """
@@ -99,8 +120,10 @@ class SafetyContext:
     tenant_id: UUID
 
     # Agronomy
-    crop: str                   # e.g. 'paddy', 'tomato', 'tea', 'chili'
+    # Agronomy
+    crop: str                   # e.g. 'tomato', 'chili', 'cabbage'
     stage: GrowthStage
+    soil_type: SoilType         # set by the user at plot creation
     region: Region
 
     # Weather (may be stale — always check .is_stale() if it matters)
@@ -113,6 +136,7 @@ class SafetyContext:
     last_irrigation_at: datetime | None = None
     volume_today_L: float = 0.0
     volume_today_per_ha_L: float = 0.0
+    irrigation_events_today: int = 0     # for pulse limit checking
 
     # Snapshot time — when the context was built
     captured_at: datetime = field(
@@ -140,6 +164,14 @@ class SafetyContext:
             return False
         age = datetime.now(timezone.utc) - self.last_irrigation_at
         return age.total_seconds() < 7200
+
+    @property
+    def minutes_since_last_irrigation(self) -> float | None:
+        """Minutes since last irrigation, or None if never irrigated."""
+        if self.last_irrigation_at is None:
+            return None
+        delta = datetime.now(timezone.utc) - self.last_irrigation_at
+        return delta.total_seconds() / 60.0
 
     def __repr__(self) -> str:
         return (

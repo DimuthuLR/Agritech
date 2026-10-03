@@ -101,7 +101,7 @@ def validate_tool_call(
         raise SafetyViolation(f"weather suppression: {suppression}")
 
     # --- 3. Limits must exist (fail closed) ---
-    limits = get_limits(ctx.crop, ctx.stage, ctx.region)
+    limits = get_limits(ctx.crop, ctx.stage, ctx.soil_type, ctx.region)    
     if limits is None:
         _maybe_audit(
             db,

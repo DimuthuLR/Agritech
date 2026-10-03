@@ -5,6 +5,12 @@ import uuid
 from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict
 
+from app.core.safety.context import SoilType
+
+
+# Soil types as string values for the API (lowercase, snake_case)
+SOIL_TYPE_VALUES = tuple(s.value for s in SoilType)
+
 
 class PlotBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
@@ -13,6 +19,10 @@ class PlotBase(BaseModel):
     longitude: float | None = Field(None, ge=-180, le=180)
     crop: str | None = Field(None, max_length=64)
     stage: str | None = Field(None, max_length=32)
+    soil_type: SoilType = Field(
+        ...,
+        description="Soil type or growing medium. Required at creation.",
+    )
 
 
 class PlotCreate(PlotBase):
@@ -40,3 +50,4 @@ class PlotUpdate(BaseModel):
     longitude: float | None = Field(None, ge=-180, le=180)
     crop: str | None = Field(None, max_length=64)
     stage: str | None = Field(None, max_length=32)
+    soil_type: SoilType | None = None

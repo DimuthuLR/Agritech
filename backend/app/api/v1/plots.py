@@ -49,14 +49,15 @@ def create_plot(
     _get_owned_farm(db, payload.farm_id, user.tenant_id)
 
     plot = Plot(
-        tenant_id=user.tenant_id,   # derived from token, not client
-        farm_id=payload.farm_id,    # already verified to belong to caller
+        tenant_id=user.tenant_id,
+        farm_id=payload.farm_id,
         name=payload.name,
         area_ha=payload.area_ha,
         latitude=payload.latitude,
         longitude=payload.longitude,
         crop=payload.crop,
         stage=payload.stage,
+        soil_type=payload.soil_type.value,
     )
     db.add(plot)
     db.commit()

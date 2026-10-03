@@ -30,10 +30,13 @@ class Plot(Base):
     area_ha: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
-
+    
     # Agronomy
     crop: Mapped[str | None] = mapped_column(String(64), nullable=True)
     stage: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Soil type / growing medium — user-specified at plot creation.
+    # Nullable for backwards compat; gate refuses actions when NULL.
+    soil_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

@@ -2,9 +2,6 @@
 Numeric validation against the limits matrix.
 
 Each tool has its own argument shape and its own safety checks.
-This module keeps that logic in one place, separated from the
-weather gate and the orchestrator.
-
 Raises LimitViolation on failure.
 """
 from app.core.safety.context import SafetyContext
@@ -21,27 +18,35 @@ class LimitViolation(Exception):
 # ---------------------------------------------------------------------------
 
 def check_irrigation(ctx: SafetyContext, args: dict, limits: Limits) -> None:
-    """Validate irrigation arguments against the limits matrix."""
+    """Validate irrigation arguments against the resolved limits."""
     duration = args.get("duration_min")
     if not isinstance(duration, (int, float)):
         raise LimitViolation("duration_min must be numeric")
-
     if duration <= 0:
         raise LimitViolation(f"duration_min must be positive (got {duration})")
-
-    if duration > limits.max_irrigation_min:
+    if duration > limits.max_minutes_per_event:
         raise LimitViolation(
             f"irrigation duration {duration}min exceeds max "
-            f"{limits.max_irrigation_min}min for {ctx.crop} "
-            f"({ctx.stage.value}) in {ctx.region.value}"
+            f"{limits.max_minutes_per_event}min per event for "
+            f"{ctx.crop} ({ctx.stage.value}) on {ctx.soil_type.value}"
         )
 
-    if ctx.has_recent_irrigation:
+    # Minimum gap between events
+    minutes_since = ctx.minutes_since_last_irrigation
+    if minutes_since is not None and minutes_since < limits.min_minutes_between:
         raise LimitViolation(
-            f"last irrigation at {ctx.last_irrigation_at.isoformat()} "
-            f"is within minimum gap of {limits.min_hours_between}h"
+            f"last irrigation was {minutes_since:.0f}min ago, minimum gap is "
+            f"{limits.min_minutes_between}min"
         )
 
+    # Max events per day (rolling 24h)
+    if ctx.irrigation_events_today >= limits.max_events_per_day:
+        raise LimitViolation(
+            f"already irrigated {ctx.irrigation_events_today} times today, "
+            f"max is {limits.max_events_per_day} per 24h"
+        )
+
+    # Cumulative daily volume — only checked if client provided volume_liters
     volume = args.get("volume_liters")
     if volume is not None:
         if not isinstance(volume, (int, float)) or volume < 0:
@@ -55,14 +60,14 @@ def check_irrigation(ctx: SafetyContext, args: dict, limits: Limits) -> None:
 
 
 def check_fertigation(ctx: SafetyContext, args: dict, limits: Limits) -> None:
-    """Validate fertigation arguments against the limits matrix."""
+    """Validate fertigation arguments against the resolved limits."""
     duration = args.get("duration_min")
     if not isinstance(duration, (int, float)) or duration <= 0:
         raise LimitViolation("duration_min must be positive")
-    if duration > limits.max_irrigation_min:
+    if duration > limits.max_minutes_per_event:
         raise LimitViolation(
             f"fertigation duration {duration}min exceeds max "
-            f"{limits.max_irrigation_min}min"
+            f"{limits.max_minutes_per_event}min per event"
         )
 
     ec = args.get("ec_target")
@@ -76,9 +81,17 @@ def check_fertigation(ctx: SafetyContext, args: dict, limits: Limits) -> None:
             f"mS/cm for {ctx.crop} ({ctx.stage.value})"
         )
 
+    # Gap check applies to fertigation too
+    minutes_since = ctx.minutes_since_last_irrigation
+    if minutes_since is not None and minutes_since < limits.min_minutes_between:
+        raise LimitViolation(
+            f"last irrigation/fertigation was {minutes_since:.0f}min ago, "
+            f"minimum gap is {limits.min_minutes_between}min"
+        )
+
 
 def check_spray(ctx: SafetyContext, args: dict, limits: Limits) -> None:
-    """Validate chemical spray arguments against the limits matrix."""
+    """Validate chemical spray arguments against the resolved limits."""
     dose = args.get("dose_ml_per_ha")
     if dose is None:
         raise LimitViolation("dose_ml_per_ha is required for spray")
@@ -87,7 +100,7 @@ def check_spray(ctx: SafetyContext, args: dict, limits: Limits) -> None:
     if dose > limits.max_chem_dose_ml_per_ha:
         raise LimitViolation(
             f"dose {dose} ml/ha exceeds max {limits.max_chem_dose_ml_per_ha} "
-            f"ml/ha for {ctx.crop} ({ctx.stage.value}) in {ctx.region.value}"
+            f"ml/ha for {ctx.crop} ({ctx.stage.value})"
         )
 
 
@@ -103,11 +116,7 @@ CHECKERS = {
 
 
 def check_limits(ctx: SafetyContext, tool: str, args: dict, limits: Limits) -> None:
-    """
-    Run the tool-specific limit check. Raises LimitViolation on any failure.
-    No-op for unknown tools → but gate.py already rejects unknown tools
-    before this runs, so the fallthrough is a defensive check.
-    """
+    """Run the tool-specific limit check. Raises LimitViolation on failure."""
     checker = CHECKERS.get(tool)
     if checker is None:
         raise LimitViolation(f"no limits checker registered for tool {tool!r}")
