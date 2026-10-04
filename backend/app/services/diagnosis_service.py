@@ -80,6 +80,8 @@ class DiagnosisResult:
     prevention_next_season: list[str]
     estimated_cost_lkr: float
     requires_chemical: bool
+    recommended_ingredient: str | None = None
+    recommended_dose_ml_per_ha: float | None = None
     raw_response: str = ""
     model: str = MODEL_TAG
     prompt_version: str = PROMPT_VERSION
@@ -108,8 +110,13 @@ CHARACTER:
 
 CHEMICALS:
 - Only recommend chemical treatment if the disease clearly warrants it.
-- If you recommend a chemical, set "requires_chemical": true.
-- Estimate the cost of the full treatment in LKR.
+- If you recommend a chemical, set "requires_chemical": true and provide
+  the structured "recommended_chemical" block below.
+- Use the active-ingredient name in snake_case (e.g. "copper_oxychloride",
+  "mancozeb", "neem_oil").
+- Give a dose in ml of product per hectare (typical range 200-1500).
+- Estimate the cost of the full treatment in LKR as a rough ballpark only;
+  the platform will calculate the real cost from verified prices.
 
 OUTPUT FORMAT:
 Respond with a single JSON object. No prose outside the JSON.
@@ -122,7 +129,11 @@ Respond with a single JSON object. No prose outside the JSON.
   "treatment_steps": ["<step 1>", "<step 2>", ...],
   "prevention_next_season": ["<practice 1>", "<practice 2>", ...],
   "estimated_cost_lkr": <number>,
-  "requires_chemical": <true|false>
+  "requires_chemical": <true|false>,
+  "recommended_chemical": {
+    "active_ingredient": "<snake_case name>" | null,
+    "dose_ml_per_ha": <number> | null
+  } | null
 }
 """
 
@@ -221,6 +232,18 @@ def _parse_response(raw: str) -> DiagnosisResult:
         if not isinstance(prevention, list):
             prevention = [str(prevention)]
 
+        # Parse the structured chemical block if present
+        ingredient: str | None = None
+        dose: float | None = None
+        chem_block = data.get("recommended_chemical")
+        if isinstance(chem_block, dict):
+            ing = chem_block.get("active_ingredient")
+            if isinstance(ing, str) and ing.strip():
+                ingredient = ing.strip().lower().replace(" ", "_")
+            d = chem_block.get("dose_ml_per_ha")
+            if isinstance(d, (int, float)) and d > 0:
+                dose = float(d)
+
         return DiagnosisResult(
             disease=str(data["disease"])[:200],
             confidence=max(0.0, min(1.0, confidence)),
@@ -230,6 +253,8 @@ def _parse_response(raw: str) -> DiagnosisResult:
             prevention_next_season=[str(t) for t in prevention],
             estimated_cost_lkr=cost,
             requires_chemical=bool(data["requires_chemical"]),
+            recommended_ingredient=ingredient,
+            recommended_dose_ml_per_ha=dose,
             raw_response=raw,
         )
     except (TypeError, ValueError) as e:
@@ -241,6 +266,108 @@ def _parse_response(raw: str) -> DiagnosisResult:
 class DiagnosisError(Exception):
     """Raised when a diagnosis cannot be completed."""
     pass
+
+
+# --- Cost calculation (Phase 8d) --------------------------------------------
+
+def calculate_diagnosis_cost(
+    db: Session,
+    diag: "Diagnosis",
+) -> tuple[float | None, dict | None]:
+    """
+    Calculate the real cost of the recommended treatment from input_prices.
+
+    Returns (calculated_cost_lkr, breakdown_dict).
+    Returns (None, None) if we can't calculate (no chemical, no price, etc.).
+
+    Uses the same assumptions as ledger_service for chemical + water + labor.
+    """
+    from decimal import Decimal
+
+    from app.db.models.input_price import InputCategory
+    from app.db.models.plot import Plot
+    from app.services import agricultural_constants as const
+    from app.services.pricing_service import get_price
+
+    if not diag.recommended_ingredient or not diag.recommended_dose_ml_per_ha:
+        return None, None
+
+    plot = db.get(Plot, diag.plot_id)
+    if plot is None:
+        return None, None
+
+    area_ha = Decimal(str(plot.area_ha or 0))
+    if area_ha <= 0:
+        area_ha = Decimal("0.1")   # smallholder fallback
+
+    dose = Decimal(str(diag.recommended_dose_ml_per_ha))
+
+    # Look up the chemical price
+    chem_price = get_price(
+        db,
+        active_ingredient=diag.recommended_ingredient,
+        tenant_id=diag.tenant_id,
+    )
+    if chem_price is None:
+        return None, {"error": f"no price for {diag.recommended_ingredient}"}
+
+    # Look up water and labor prices
+    water_price = get_price(db, active_ingredient="water", tenant_id=diag.tenant_id)
+    labor_price = get_price(db, active_ingredient="farm_labor_general", tenant_id=diag.tenant_id)
+
+    # Calculate each line item
+    breakdown: dict = {"lines": []}
+    total = Decimal("0")
+
+    # Chemical
+    chem_kg = (dose * area_ha) / Decimal("1000")
+    chem_unit_price = Decimal(str(chem_price.price_lkr))
+    chem_amount = (chem_kg * chem_unit_price).quantize(Decimal("0.01"))
+    total += chem_amount
+    breakdown["lines"].append({
+        "category": "chemical",
+        "product": chem_price.product_name,
+        "qty": float(chem_kg),
+        "unit": chem_price.unit,
+        "unit_price_lkr": float(chem_unit_price),
+        "amount_lkr": float(chem_amount),
+    })
+
+    # Water (carrier)
+    if water_price is not None:
+        carrier_L = const.DEFAULT_SPRAY_CARRIER_L_PER_HA * area_ha
+        water_unit_price = Decimal(str(water_price.price_lkr))
+        water_amount = (carrier_L * water_unit_price).quantize(Decimal("0.01"))
+        total += water_amount
+        breakdown["lines"].append({
+            "category": "water",
+            "product": water_price.product_name,
+            "qty": float(carrier_L),
+            "unit": "L",
+            "unit_price_lkr": float(water_unit_price),
+            "amount_lkr": float(water_amount),
+        })
+
+    # Labor
+    if labor_price is not None:
+        labor_hr = const.DEFAULT_SPRAY_LABOR_HOURS_PER_HA * area_ha
+        labor_unit_price = Decimal(str(labor_price.price_lkr))
+        labor_amount = (labor_hr * labor_unit_price).quantize(Decimal("0.01"))
+        total += labor_amount
+        breakdown["lines"].append({
+            "category": "labor",
+            "product": labor_price.product_name,
+            "qty": float(labor_hr),
+            "unit": "hr",
+            "unit_price_lkr": float(labor_unit_price),
+            "amount_lkr": float(labor_amount),
+        })
+
+    breakdown["total_lkr"] = float(total)
+    breakdown["area_ha"] = float(area_ha)
+    breakdown["dose_ml_per_ha"] = float(dose)
+
+    return float(total), breakdown
 
 
 # --- Task proposal (Phase 7f) -----------------------------------------------
@@ -379,9 +506,21 @@ def run_and_store_diagnosis(
     diag.prevention_next_season = result.prevention_next_season
     diag.estimated_cost_lkr = result.estimated_cost_lkr
     diag.requires_chemical = result.requires_chemical
+    diag.recommended_ingredient = result.recommended_ingredient
+    diag.recommended_dose_ml_per_ha = result.recommended_dose_ml_per_ha
     diag.model = result.model
     diag.prompt_version = result.prompt_version
     diag.completed_at = datetime.now(timezone.utc)
+
+    # Phase 8d — calculate the real cost from input_prices (best-effort)
+    try:
+        calculated, basis = calculate_diagnosis_cost(db, diag)
+        if calculated is not None:
+            diag.calculated_cost_lkr = calculated
+            diag.cost_calculation_basis = basis
+    except Exception as e:
+        log.warning(f"Cost calculation failed for diagnosis {diag.id}: {e}")
+
     db.commit()
     db.refresh(diag)
 

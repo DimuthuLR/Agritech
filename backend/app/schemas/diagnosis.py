@@ -34,7 +34,15 @@ class DiagnosisRead(BaseModel):
     what_is_happening: str | None
     treatment_steps: list[str] | None
     prevention_next_season: list[str] | None
-    estimated_cost_lkr: float | None
+
+    # Cost — model's guess vs. calculated from real prices
+    estimated_cost_lkr: float | None      # Model's guess
+    calculated_cost_lkr: float | None     # Computed from input_prices
+    cost_calculation_basis: dict | None   # Breakdown of the calculation
+
+    # Structured chemical recommendation
+    recommended_ingredient: str | None
+    recommended_dose_ml_per_ha: float | None
 
     # Cross-links
     model: str | None                    # which model produced this

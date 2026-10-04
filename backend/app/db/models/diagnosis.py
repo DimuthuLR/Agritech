@@ -71,6 +71,21 @@ class Diagnosis(Base):
     requires_chemical: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+        # Structured chemical recommendation (Phase 8d — parsed from model output)
+    recommended_ingredient: Mapped[str | None] = mapped_column(
+        String(120), nullable=True
+    )
+    recommended_dose_ml_per_ha: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+
+    # Calculated cost (Phase 8d — from input_prices, not the model)
+    calculated_cost_lkr: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+    cost_calculation_basis: Mapped[dict | None] = mapped_column(
+        JSONB, nullable=True
+    )
     proposed_task_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("tasks.id", ondelete="SET NULL"),
         nullable=True,
