@@ -27,3 +27,6 @@ httpx==0.27.2
 
 # LLM
 openai>=1.50.0
+
+# Communication
+paho-mqtt>=2.0
