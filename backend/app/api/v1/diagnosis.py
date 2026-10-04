@@ -38,6 +38,10 @@ from app.services.diagnosis_service import (
     DiagnosisError,
     run_and_store_diagnosis,
 )
+from app.services.diagnosis_cache import (
+    check_budget,
+    find_cached_diagnosis,
+)
 
 
 log = logging.getLogger(__name__)
@@ -157,9 +161,23 @@ async def upload_diagnosis(
             detail="Empty image file",
         )
 
+    # --- Compute hash early (used by cache + storage) ---
+    image_hash = hashlib.sha256(image_bytes).hexdigest()
+
+    # --- Cache lookup: same tenant, same image, already diagnosed? ---
+    cached = find_cached_diagnosis(db, user.tenant_id, image_hash)
+    if cached is not None:
+        log.info(
+            f"Cache hit for tenant {user.tenant_id}, "
+            f"hash {image_hash[:16]}"
+        )
+        return cached
+
+    # --- Budget guard: refuse if today's limit is reached ---
+    check_budget(db, user.tenant_id)
+
     # --- Persist to disk (tenant-isolated) ---
     saved_path = _save_image_bytes(user.tenant_id, image_bytes, ext)
-    image_hash = hashlib.sha256(image_bytes).hexdigest()
 
     # --- Create the Diagnosis row (pending) ---
     diag = Diagnosis(
