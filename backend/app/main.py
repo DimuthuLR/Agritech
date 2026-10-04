@@ -18,6 +18,7 @@ from app.api.v1.farms import router as farms_router
 from app.api.v1.plots import router as plots_router
 from app.api.v1.devices import router as devices_router
 from app.api.v1.sensor import router as sensor_router
+from app.api.v1.diagnosis import router as diagnosis_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -73,3 +74,4 @@ app.include_router(farms_router, prefix="/api/v1")
 app.include_router(plots_router, prefix="/api/v1")
 app.include_router(devices_router, prefix="/api/v1")
 app.include_router(sensor_router, prefix="/api/v1")
+app.include_router(diagnosis_router, prefix="/api/v1")
