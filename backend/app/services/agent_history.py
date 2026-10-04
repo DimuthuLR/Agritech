@@ -16,6 +16,10 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.db.models.audit_log import AuditLog
+from app.services.field_event_service import (
+    format_overrides_for_prompt,
+    list_recent_overrides,
+)
 
 
 # Which audit kinds represent a "decision" the agent should remember.
@@ -118,5 +122,13 @@ def format_decisions_for_prompt(decisions: list[dict]) -> str:
         lines.append(
             f"  {ts} ({minutes_ago}min ago) — {prefix} {tool}{arg_str} — {reason}"
         )
+
+def fetch_overrides_context(db, plot_id, limit: int = 5) -> str:
+    """
+    Return a formatted text block of recent overrides for the agent prompt.
+    Returns empty string if there are no overrides.
+    """
+    events = list_recent_overrides(db, plot_id, limit=limit)
+    return format_overrides_for_prompt(events)
 
     return "\n".join(lines)

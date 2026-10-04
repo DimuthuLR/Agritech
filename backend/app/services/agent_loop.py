@@ -30,6 +30,7 @@ from app.core.safety.gate import (
 from app.db.models.plot import Plot
 from app.db.models.task import Task
 from app.services.agent_history import (
+    fetch_overrides_context,
     fetch_recent_decisions,
     format_decisions_for_prompt,
 )
@@ -81,6 +82,15 @@ def _build_enriched_context(db: Session, plot: Plot, plot_id: UUID) -> str:
               "spot patterns. If you irrigated recently, do not irrigate "
               "again just because soil is dry — the water may not have "
               "reached the sensor yet."
+        )
+        
+    # --- Layer 1b: farmer overrides ---
+    overrides_text = fetch_overrides_context(db, plot_id, limit=5)
+    if overrides_text:
+        parts.append(
+            overrides_text
+            + "\n\nThese are cases where the farmer acted against past advice. "
+              "Use them to gauge how reliable forecasts have been on this plot."
         )
 
     # Layer 2: 7-day sensor trend

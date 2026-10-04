@@ -15,26 +15,19 @@ from app.db.models.actuator_command import ActuatorCommand
 from app.db.models.diagnosis import Diagnosis
 from app.db.models.input_price import InputPrice, InputCategory
 from app.db.models.financial_ledger import FinancialLedger, LedgerCategory
+from app.db.models.field_event import FieldEvent, FieldEventType, FieldEventOutcome
 from app.db.models.audit_log import AuditLog
 
 __all__ = [
-    "Tenant",
-    "TenantFeature",
-    "User",
-    "TenantRole",
-    "PlatformRole",
-    "Farm",
-    "Plot",
-    "CropBatch",
-    "Device",
-    "SensorReading",
-    "Task",
-    "TaskStatus",
+    "Tenant", "TenantFeature",
+    "User", "TenantRole", "PlatformRole",
+    "Farm", "Plot", "CropBatch",
+    "Device", "SensorReading",
+    "Task", "TaskStatus",
     "ActuatorCommand",
     "Diagnosis",
-    "InputPrice",
-    "InputCategory",
-    "FinancialLedger",
-    "LedgerCategory",
+    "InputPrice", "InputCategory",
+    "FinancialLedger", "LedgerCategory",
+    "FieldEvent", "FieldEventType", "FieldEventOutcome",
     "AuditLog",
 ]
