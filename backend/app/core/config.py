@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     mqtt_host: str = "localhost"
     mqtt_port: int = 1883
 
+    # --- AI Models ---
+    llama_server_url: str = "http://127.0.0.1:8081/v1"
+    llama_server_api_key: str = "not-needed"
+    vision_model_name: str = "gemma-3-4b"
 
 # Single shared instance. Import this everywhere.
 settings = Settings()
