@@ -14,6 +14,7 @@ from app.db.models.task import Task, TaskStatus
 from app.db.models.actuator_command import ActuatorCommand
 from app.db.models.diagnosis import Diagnosis
 from app.db.models.input_price import InputPrice, InputCategory
+from app.db.models.financial_ledger import FinancialLedger, LedgerCategory
 from app.db.models.audit_log import AuditLog
 
 __all__ = [
@@ -33,5 +34,7 @@ __all__ = [
     "Diagnosis",
     "InputPrice",
     "InputCategory",
+    "FinancialLedger",
+    "LedgerCategory",
     "AuditLog",
 ]
