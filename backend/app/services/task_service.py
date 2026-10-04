@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.core.safety.audit import write_audit
 from app.core.safety.context import SafetyContext
 from app.db.models.task import Task, TaskStatus
+from app.db.models.financial_ledger import FinancialLedger  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +311,22 @@ def mark_done(db: Session, task_id: uuid.UUID, result: dict | None = None) -> Ta
         db, task, from_status=prev, to_status=TaskStatus.DONE, actor="system",
     )
     db.commit()
+    db.refresh(task)
+
+    # --- Post ledger entries for consumed inputs (Phase 8c) ---
+    # Best-effort: task completion must not fail because of a ledger bug.
+    try:
+        from app.services.ledger_service import post_task_costs
+        entries = post_task_costs(db, task)
+        if entries:
+            db.commit()
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception(
+            f"Ledger posting failed for task {task.id}"
+        )
+        db.rollback()
+
     db.refresh(task)
     return task
 
