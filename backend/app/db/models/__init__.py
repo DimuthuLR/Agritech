@@ -13,6 +13,7 @@ from app.db.models.sensor_reading import SensorReading
 from app.db.models.task import Task, TaskStatus
 from app.db.models.actuator_command import ActuatorCommand
 from app.db.models.diagnosis import Diagnosis
+from app.db.models.input_price import InputPrice, InputCategory
 from app.db.models.audit_log import AuditLog
 
 __all__ = [
@@ -30,5 +31,7 @@ __all__ = [
     "TaskStatus",
     "ActuatorCommand",
     "Diagnosis",
+    "InputPrice",
+    "InputCategory",
     "AuditLog",
 ]
