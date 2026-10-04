@@ -34,3 +34,9 @@ redisdata/
 
 # ---- Embedded Python bootstrap ----
 get-pip.py
+
+# Uploaded files
+backend/data/
+
+# Test fixtures
+backend/test_leaf.jpg
