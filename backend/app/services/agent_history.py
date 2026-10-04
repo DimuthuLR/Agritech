@@ -130,5 +130,3 @@ def fetch_overrides_context(db, plot_id, limit: int = 5) -> str:
     """
     events = list_recent_overrides(db, plot_id, limit=limit)
     return format_overrides_for_prompt(events)
-
-return "\n".join(lines)
