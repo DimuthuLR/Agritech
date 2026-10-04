@@ -20,6 +20,7 @@ from app.api.v1.devices import router as devices_router
 from app.api.v1.sensor import router as sensor_router
 from app.api.v1.diagnosis import router as diagnosis_router
 from app.api.v1.tasks import router as tasks_router
+from app.api.v1.finance import router as finance_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -80,3 +81,4 @@ app.include_router(devices_router, prefix="/api/v1")
 app.include_router(sensor_router, prefix="/api/v1")
 app.include_router(diagnosis_router, prefix="/api/v1")
 app.include_router(tasks_router, prefix="/api/v1")
+app.include_router(finance_router, prefix="/api/v1")
