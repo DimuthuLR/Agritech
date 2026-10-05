@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '../../stores/auth'
+import { useTasksStore } from '../../stores/tasks'
 import {
   LayoutDashboard,
   Sprout,
@@ -17,6 +18,7 @@ const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 const route = useRoute()
 const auth = useAuthStore()
+const tasksStore = useTasksStore()
 
 interface NavItem {
   name: string
@@ -66,7 +68,14 @@ const visibleItems = computed(() =>
         @click="emit('close')"
       >
         <component :is="item.icon" :size="18" :stroke-width="1.75" />
-        <span>{{ item.label }}</span>
+        <span class="flex-1">{{ item.label }}</span>
+        <span
+          v-if="item.name === 'tasks' && tasksStore.pendingCount"
+          class="px-1.5 py-0.5 rounded-full text-[10px] font-medium
+                 bg-warning/15 text-warning"
+        >
+          {{ tasksStore.pendingCount }}
+        </span>
       </router-link>
     </nav>
   </aside>
