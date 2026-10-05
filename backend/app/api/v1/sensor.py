@@ -1,26 +1,39 @@
 """
 Sensor endpoints.
 
-- POST /sensor/readings        — device-authenticated ingest (HMAC)
-- GET  /sensor/readings        — tenant-authenticated query (JWT)
+HTTP:
+    POST /sensor/readings          — device-authenticated ingest (HMAC)
+    GET  /sensor/readings          — tenant-authenticated query (JWT)
+    GET  /sensor/readings/summary  — aggregated (continuous aggregates)
 
-Different auth paths, same router. The ingest endpoint bypasses JWT entirely
-because devices don't hold JWTs — they sign requests with a shared secret.
+WebSocket:
+    WS   /sensor/ws/{plot_id}      — live stream (JWT via query param)
+
+Design note on WebSocket auth:
+    Browsers cannot set custom headers on WebSocket connections. We accept
+    the JWT as a query parameter. In production, prefer a short-lived,
+    single-use "ticket" endpoint (GET /auth/ws-ticket) to avoid tokens
+    appearing in access logs. Phase 12 hardening item.
 """
+import asyncio
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import (
+    APIRouter, Depends, HTTPException, Request,
+    WebSocket, WebSocketDisconnect, status,
+)
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
-from sqlalchemy import text
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import require_tenant_role
 from app.core.device_auth import verify_device_signature
+from app.core.security import decode_token, TokenError
+from app.db.models.plot import Plot
 from app.db.models.sensor_reading import SensorReading
 from app.db.models.user import User, TenantRole
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
 from app.schemas.sensor import (
     IngestAck,
     ReadingCreate,
@@ -33,8 +46,9 @@ from app.schemas.sensor import (
 router = APIRouter(prefix="/sensor", tags=["sensor"])
 
 
-# --- Ingest (device-authenticated) -------------------------------------------
-
+# ===========================================================================
+# HTTP — Ingest (device-authenticated)
+# ===========================================================================
 
 @router.post(
     "/readings",
@@ -64,7 +78,6 @@ async def ingest_reading(request: Request, db: Session = Depends(get_db)):
 
     device = verify_device_signature(db, serial, ts_str, raw_body, signature)
 
-    # Parse body AFTER auth so malformed JSON from bad actors doesn't waste CPU.
     try:
         payload = ReadingCreate.model_validate_json(raw_body)
     except ValidationError as e:
@@ -81,8 +94,7 @@ async def ingest_reading(request: Request, db: Session = Depends(get_db)):
 
     reading_time = payload.time or datetime.now(timezone.utc)
 
-    # INSERT ... ON CONFLICT DO NOTHING: a duplicate reading (same time,
-    # device, metric) is not an error — the reading is already recorded.
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
     stmt = pg_insert(SensorReading).values(
         time=reading_time,
         device_id=device.id,
@@ -94,17 +106,15 @@ async def ingest_reading(request: Request, db: Session = Depends(get_db)):
 
     db.execute(stmt)
 
-    # Update last_seen_at regardless — the device is alive even if the
-    # reading was a duplicate.
     device.last_seen_at = datetime.now(timezone.utc)
-
     db.commit()
 
     return IngestAck(time=reading_time)
 
 
-# --- Query (tenant-authenticated) --------------------------------------------
-
+# ===========================================================================
+# HTTP — Query (tenant-authenticated)
+# ===========================================================================
 
 @router.get("/readings", response_model=list[ReadingRead])
 def list_readings(
@@ -117,12 +127,7 @@ def list_readings(
     until: datetime | None = None,
     limit: int = 500,
 ):
-    """
-    Query readings for the caller's tenant.
-
-    All filters are optional. Results are ordered newest first.
-    Uses continuous aggregates later for large windows (Phase 3e).
-    """
+    """Query readings for the caller's tenant, newest first."""
     q = db.query(SensorReading).filter(SensorReading.tenant_id == user.tenant_id)
 
     if device_id is not None:
@@ -141,8 +146,11 @@ def list_readings(
         .limit(min(limit, 5000))
         .all()
     )
-    # --- Summary (aggregated query) ----------------------------------------------
 
+
+# ===========================================================================
+# HTTP — Summary (continuous aggregates)
+# ===========================================================================
 
 ALLOWED_BUCKETS = {"1h": "sensor_1h", "6h": "sensor_6h"}
 ALLOWED_WINDOWS = {
@@ -166,13 +174,9 @@ def summary_readings(
     metric: str | None = None,
     limit: int = 500,
 ):
-    """
-    Return pre-aggregated readings from a continuous aggregate view.
+    """Return pre-aggregated readings from a continuous aggregate view."""
+    from sqlalchemy import text
 
-    - bucket: '1h' or '6h' (which aggregate to query)
-    - window: how far back to look ('1h', '24h', '7d', '30d', '90d')
-    - All filters are optional.
-    """
     if bucket not in ALLOWED_BUCKETS:
         raise HTTPException(400, f"Invalid bucket. Allowed: {sorted(ALLOWED_BUCKETS)}")
     if window not in ALLOWED_WINDOWS:
@@ -181,8 +185,6 @@ def summary_readings(
     view = ALLOWED_BUCKETS[bucket]
     interval = ALLOWED_WINDOWS[window]
 
-    # Build a parameterized query. The view name and interval come from
-    # whitelists above — never interpolated from user input — so this is safe.
     sql = f"""
         SELECT bucket, device_id, metric,
                avg_value, min_value, max_value, sample_count
@@ -207,3 +209,131 @@ def summary_readings(
 
     rows = db.execute(text(sql), params).mappings().all()
     return [dict(r) for r in rows]
+
+
+# ===========================================================================
+# WebSocket — Live stream
+# ===========================================================================
+
+def _fetch_new_readings(
+    plot_id: uuid.UUID,
+    since: datetime,
+) -> list[dict]:
+    """
+    Fetch readings newer than `since` for a plot.
+
+    Runs in a thread pool so the WebSocket event loop isn't blocked.
+    Opens its own DB session to avoid sharing state across the async task.
+    """
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(SensorReading)
+            .filter(
+                SensorReading.plot_id == plot_id,
+                SensorReading.time > since,
+            )
+            .order_by(SensorReading.time.asc())
+            .limit(100)
+            .all()
+        )
+        return [
+            {
+                "time": r.time.isoformat(),
+                "device_id": str(r.device_id),
+                "metric": r.metric,
+                "value": r.value,
+            }
+            for r in rows
+        ]
+    finally:
+        db.close()
+
+
+def _lookup_plot_for_user(
+    plot_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> bool:
+    """
+    Return True if the plot exists and belongs to the user's tenant.
+    Runs in a thread pool.
+    """
+    db = SessionLocal()
+    try:
+        user = db.get(User, user_id)
+        if user is None or not user.is_active:
+            return False
+        plot = (
+            db.query(Plot)
+            .filter(Plot.id == plot_id, Plot.tenant_id == user.tenant_id)
+            .first()
+        )
+        return plot is not None
+    finally:
+        db.close()
+
+
+@router.websocket("/ws/{plot_id}")
+async def sensor_stream(websocket: WebSocket, plot_id: uuid.UUID):
+    """
+    Live sensor reading stream for a plot.
+
+    Client connects with ?token=<JWT>. Server verifies the user owns the
+    plot, then streams new readings as they arrive (polling every 2s).
+
+    Close codes:
+      4401 — missing or invalid token
+      4404 — plot not found or not owned by caller
+    """
+    # --- Auth ---
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=4401, reason="Missing token")
+        return
+
+    try:
+        payload = decode_token(token)
+        user_id = uuid.UUID(payload["sub"])
+    except (TokenError, ValueError, KeyError, TypeError):
+        await websocket.close(code=4401, reason="Invalid token")
+        return
+
+    # --- Ownership check (threadpool; runs sync DB query) ---
+    owns = await run_in_threadpool(_lookup_plot_for_user, plot_id, user_id)
+    if not owns:
+        await websocket.close(code=4404, reason="Plot not found")
+        return
+
+    await websocket.accept()
+
+    # --- Stream loop ---
+    # Start from 5 minutes ago so the client immediately gets recent history.
+    last_seen = datetime.now(timezone.utc) - timedelta(minutes=5)
+
+    try:
+        while True:
+            try:
+                readings = await run_in_threadpool(
+                    _fetch_new_readings, plot_id, last_seen,
+                )
+                for r in readings:
+                    await websocket.send_json(r)
+                    # Advance the cursor using the reading's own timestamp
+                    reading_time = datetime.fromisoformat(r["time"])
+                    if reading_time > last_seen:
+                        last_seen = reading_time
+            except WebSocketDisconnect:
+                break
+            except Exception:
+                # Log and continue — a single bad query shouldn't kill the stream
+                pass
+
+            # Sleep between polls. Kept modest so the chart feels "live".
+            await asyncio.sleep(2.0)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass

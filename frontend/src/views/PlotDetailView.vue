@@ -8,6 +8,8 @@ import {
 
 import { usePlotsStore } from '../stores/plots'
 import { tasksApi } from '../api/tasks'
+import { useSensorStream } from '../composables/useSensorStream'
+import SensorChart from '../components/charts/SensorChart.vue'
 import { diagnosesApi, type Diagnosis } from '../api/diagnoses'
 import { financeApi, type CostSummary } from '../api/finance'
 import { SOIL_TYPE_LABELS, type Plot } from '../types/plot'
@@ -31,6 +33,13 @@ const soilLabel = computed(() =>
 const pendingTasks = computed(() =>
   tasks.value.filter((t) => t.status === 'pending_approval')
 )
+// --- Live sensor stream ---
+const sensors = useSensorStream(plotId.value)
+
+// Per-metric data extraction for charts
+const soilData = computed(() => sensors.series.value.soil_moisture ?? [])
+const tempData = computed(() => sensors.series.value.temperature ?? [])
+const humidData = computed(() => sensors.series.value.humidity ?? [])
 
 const recentTasks = computed(() => tasks.value.slice(0, 5))
 const recentDiagnoses = computed(() => diagnoses.value.slice(0, 3))
@@ -104,8 +113,10 @@ async function loadAll() {
   }
 }
 
-onMounted(loadAll)
-</script>
+onMounted(() => {
+  loadAll()
+  sensors.connect()
+})</script>
 
 <template>
   <div class="max-w-5xl mx-auto space-y-6">
@@ -191,6 +202,54 @@ onMounted(loadAll)
         </div>
       </div>
     </div>
+
+    <!-- Live sensor charts -->
+    <section v-if="!loading && plot">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-semibold">Live sensors</h2>
+        <span
+          :class="[
+            'pill text-xs',
+            sensors.connected.value
+              ? 'bg-success/10 text-success'
+              : 'bg-muted/10 text-muted',
+          ]"
+        >
+          <span
+            :class="[
+              'w-1.5 h-1.5 rounded-full',
+              sensors.connected.value ? 'bg-success animate-pulse' : 'bg-muted',
+            ]"
+          />
+          {{ sensors.connected.value ? 'Live' : 'Connecting…' }}
+        </span>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <SensorChart
+          title="Soil moisture"
+          unit=""
+          :data="soilData"
+          color="#38BDF8"
+          :min-value="0"
+          :max-value="1"
+        />
+        <SensorChart
+          title="Temperature"
+          unit="°C"
+          :data="tempData"
+          color="#F59E0B"
+        />
+        <SensorChart
+          title="Humidity"
+          unit=""
+          :data="humidData"
+          color="#34D399"
+          :min-value="0"
+          :max-value="1"
+        />
+      </div>
+    </section>
 
     <!-- Recent Tasks -->
     <section v-if="!loading && plot">
