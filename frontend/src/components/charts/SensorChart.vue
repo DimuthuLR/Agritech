@@ -9,6 +9,7 @@ import {
   LegendComponent,
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
+import { useChartTheme } from '../../composables/useChartTheme'
 
 use([LineChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer])
 
@@ -20,6 +21,8 @@ const props = defineProps<{
   minValue?: number
   maxValue?: number
 }>()
+
+const theme = useChartTheme()
 
 const option = computed(() => ({
   grid: { top: 15, right: 12, bottom: 30, left: 45 },
@@ -36,8 +39,8 @@ const option = computed(() => ({
   },
   xAxis: {
     type: 'time',
-    axisLine: { lineStyle: { color: 'var(--border)' } },
-    axisLabel: { color: 'var(--text-muted)', fontSize: 10 },
+    axisLine: { lineStyle: { color: theme.border.value } },
+    axisLabel: { color: theme.textMuted.value, fontSize: 11 },
     splitLine: { show: false },
   },
   yAxis: {
@@ -45,9 +48,9 @@ const option = computed(() => ({
     min: props.minValue,
     max: props.maxValue,
     axisLine: { show: false },
-    axisLabel: { color: 'var(--text-muted)', fontSize: 10 },
+    axisLabel: { color: theme.textMuted.value, fontSize: 11 },
     splitLine: {
-      lineStyle: { color: 'var(--border)', type: 'dashed', opacity: 0.5 },
+      lineStyle: { color: theme.border.value, type: 'dashed', opacity: 0.5 },
     },
   },
   series: [
@@ -76,17 +79,17 @@ const option = computed(() => ({
   <div class="card">
     <div class="flex items-baseline justify-between mb-3">
       <h3 class="text-sm font-medium">{{ title }}</h3>
-      <span
-        v-if="data.length"
-        class="text-lg font-semibold tabular-nums"
-      >
+      <span v-if="data.length" class="text-lg font-semibold tabular-nums">
         {{ data[data.length - 1].value.toFixed(3) }}
         <span class="text-xs text-muted font-normal ml-1">{{ unit }}</span>
       </span>
       <span v-else class="text-xs text-muted">No data yet</span>
     </div>
 
-    <div v-if="data.length === 0" class="h-40 flex items-center justify-center text-sm text-muted">
+    <div
+      v-if="data.length === 0"
+      class="h-40 flex items-center justify-center text-sm text-muted"
+    >
       Waiting for readings…
     </div>
 
