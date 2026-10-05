@@ -4,16 +4,18 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft, Leaf, Activity, Wallet,
   AlertTriangle, CheckCircle, XCircle, Clock,
+  ClipboardList, Plus, Check, X as XIcon,
 } from 'lucide-vue-next'
-
 import { usePlotsStore } from '../stores/plots'
 import { tasksApi } from '../api/tasks'
-import { useSensorStream } from '../composables/useSensorStream'
-import SensorChart from '../components/charts/SensorChart.vue'
 import { diagnosesApi, type Diagnosis } from '../api/diagnoses'
 import { financeApi, type CostSummary } from '../api/finance'
+import { fieldEventsApi, type FieldEvent } from '../api/field_events'
 import { SOIL_TYPE_LABELS, type Plot } from '../types/plot'
 import type { Task } from '../types/task'
+import { useSensorStream } from '../composables/useSensorStream'
+import SensorChart from '../components/charts/SensorChart.vue'
+import RecordOverrideModal from '../components/field_events/RecordOverrideModal.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -24,6 +26,8 @@ const plot = ref<Plot | null>(null)
 const tasks = ref<Task[]>([])
 const diagnoses = ref<Diagnosis[]>([])
 const costs = ref<CostSummary | null>(null)
+const fieldEvents = ref<FieldEvent[]>([])
+const showOverrideModal = ref(false)
 const loading = ref(true)
 
 const soilLabel = computed(() =>
@@ -33,18 +37,18 @@ const soilLabel = computed(() =>
 const pendingTasks = computed(() =>
   tasks.value.filter((t) => t.status === 'pending_approval')
 )
-// --- Live sensor stream ---
-const sensors = useSensorStream(plotId.value)
-
-// Per-metric data extraction for charts
-const soilData = computed(() => sensors.series.value.soil_moisture ?? [])
-const tempData = computed(() => sensors.series.value.temperature ?? [])
-const humidData = computed(() => sensors.series.value.humidity ?? [])
 
 const recentTasks = computed(() => tasks.value.slice(0, 5))
 const recentDiagnoses = computed(() => diagnoses.value.slice(0, 3))
 
-// Category display info
+// --- Live sensor stream ---
+const sensors = useSensorStream(plotId.value)
+
+const soilData = computed(() => sensors.series.value.soil_moisture ?? [])
+const tempData = computed(() => sensors.series.value.temperature ?? [])
+const humidData = computed(() => sensors.series.value.humidity ?? [])
+
+// --- Cost category display ---
 const CATEGORY_LABELS: Record<string, string> = {
   water: 'Water',
   fertilizer: 'Fertilizer',
@@ -92,6 +96,21 @@ function statusColor(status: string) {
   }
 }
 
+function actionLabel(tool: string | null): string {
+  if (!tool) return 'Action'
+  const labels: Record<string, string> = {
+    control_irrigation: 'Irrigation',
+    schedule_fertigation: 'Fertigation',
+    spray_chemical: 'Chemical spray',
+    other: 'Other action',
+  }
+  return labels[tool] || tool
+}
+
+function onOverrideCreated(event: FieldEvent) {
+  fieldEvents.value = [event, ...fieldEvents.value]
+}
+
 async function loadAll() {
   loading.value = true
   try {
@@ -100,14 +119,16 @@ async function loadAll() {
     plot.value = cached ?? (await store.fetchOne(plotId.value))
 
     // Parallel fetches for related data
-    const [t, d, c] = await Promise.allSettled([
+    const [t, d, c, fe] = await Promise.allSettled([
       tasksApi.list(plotId.value),
       diagnosesApi.list(plotId.value),
       financeApi.plotSummary(plotId.value),
+      fieldEventsApi.list(plotId.value, 90),
     ])
     if (t.status === 'fulfilled') tasks.value = t.value
     if (d.status === 'fulfilled') diagnoses.value = d.value
     if (c.status === 'fulfilled') costs.value = c.value
+    if (fe.status === 'fulfilled') fieldEvents.value = fe.value
   } finally {
     loading.value = false
   }
@@ -116,7 +137,8 @@ async function loadAll() {
 onMounted(() => {
   loadAll()
   sensors.connect()
-})</script>
+})
+</script>
 
 <template>
   <div class="max-w-5xl mx-auto space-y-6">
@@ -148,11 +170,7 @@ onMounted(() => {
           </p>
         </div>
 
-        <!-- Pending alert -->
-        <div
-          v-if="pendingTasks.length"
-          class="pill-warning"
-        >
+        <div v-if="pendingTasks.length" class="pill-warning">
           <Clock :size="12" :stroke-width="2" />
           {{ pendingTasks.length }} pending
           task{{ pendingTasks.length === 1 ? '' : 's' }}
@@ -271,7 +289,7 @@ onMounted(() => {
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2 flex-wrap">
               <span class="font-medium text-sm">{{ t.tool }}</span>
-              <span :class="['pill', `bg-${t.status === 'done' ? 'success' : t.status === 'pending_approval' ? 'warning' : 'muted'}/10`]">
+              <span class="pill bg-card-hover text-muted text-xs">
                 {{ t.status }}
               </span>
             </div>
@@ -303,10 +321,7 @@ onMounted(() => {
                 {{ d.severity || '—' }} severity
               </div>
             </div>
-            <div
-              v-if="d.confidence"
-              class="text-xs text-muted"
-            >
+            <div v-if="d.confidence" class="text-xs text-muted">
               {{ Math.round(d.confidence * 100) }}%
             </div>
           </div>
@@ -344,6 +359,94 @@ onMounted(() => {
         </div>
       </div>
     </section>
+
+    <!-- Overrides / self-recorded actions -->
+    <section v-if="!loading && plot">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-lg font-semibold">Our own actions</h2>
+        <button
+          class="btn-ghost text-xs py-1.5 px-3"
+          @click="showOverrideModal = true"
+        >
+          <Plus :size="14" :stroke-width="2" />
+          Record action
+        </button>
+      </div>
+
+      <div
+        v-if="fieldEvents.length === 0"
+        class="card text-sm text-muted text-center py-6"
+      >
+        <ClipboardList :size="20" :stroke-width="1.5" class="mx-auto mb-2" />
+        <p>
+          When you act against the platform's advice, record it here.
+          The AI learns from your experience.
+        </p>
+      </div>
+
+      <div v-else class="card p-0 divide-y divide-border">
+        <div
+          v-for="e in fieldEvents.slice(0, 5)"
+          :key="e.id"
+          class="p-4"
+        >
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="font-medium text-sm">
+                  {{ actionLabel(e.action_taken) }}
+                </span>
+
+                <span
+                  v-if="e.outcome === 'worked'"
+                  class="pill-success text-xs"
+                >
+                  <Check :size="11" :stroke-width="2" />
+                  Justified
+                </span>
+                <span
+                  v-else-if="e.outcome === 'failed'"
+                  class="pill-danger text-xs"
+                >
+                  <XIcon :size="11" :stroke-width="2" />
+                  Not justified
+                </span>
+                <span
+                  v-else
+                  class="pill-muted text-xs"
+                >
+                  <Clock :size="11" :stroke-width="2" />
+                  Awaiting verification
+                </span>
+              </div>
+
+              <p class="text-xs text-muted mt-1.5 line-clamp-2">
+                {{ e.reason }}
+              </p>
+            </div>
+            <span class="text-xs text-muted shrink-0">
+              {{ new Date(e.occurred_at).toLocaleDateString() }}
+            </span>
+          </div>
+
+          <div
+            v-if="e.weather_forecast_mm !== null && e.weather_actual_mm !== null"
+            class="mt-2 text-xs text-muted"
+          >
+            Forecast {{ e.weather_forecast_mm.toFixed(1) }}mm ·
+            Actual {{ e.weather_actual_mm.toFixed(1) }}mm
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Modal -->
+    <RecordOverrideModal
+      :open="showOverrideModal"
+      :plot-id="plotId"
+      @close="showOverrideModal = false"
+      @created="onOverrideCreated"
+    />
 
   </div>
 </template>
