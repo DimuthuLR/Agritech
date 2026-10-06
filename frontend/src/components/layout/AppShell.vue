@@ -3,13 +3,19 @@ import { ref, onMounted } from 'vue'
 import TopBar from './TopBar.vue'
 import Sidebar from './Sidebar.vue'
 import { useTasksStore } from '../../stores/tasks'
+import { usePlotsStore } from '../../stores/plots'
 
 const sidebarOpen = ref(false)
 const tasksStore = useTasksStore()
+const plotsStore = usePlotsStore()
 
-onMounted(() => {
-  // Load tasks once at shell mount so the sidebar badge is accurate
-  tasksStore.fetchAll()
+onMounted(async () => {
+  // Load shared data once at shell mount.
+  // Both stores are cheap to re-fetch; running these in parallel.
+  await Promise.allSettled([
+    tasksStore.fetchAll(),
+    plotsStore.fetchAll(),
+  ])
 })
 </script>
 

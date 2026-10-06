@@ -44,15 +44,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# In dev, accept any localhost port (Vite may serve on 5173, 5174, etc.)
+# In prod, this list shrinks to the real domain(s).
+_dev_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=_dev_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 
