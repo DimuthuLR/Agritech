@@ -11,6 +11,7 @@ import { tasksApi } from '../api/tasks'
 import { diagnosesApi, type Diagnosis } from '../api/diagnoses'
 import { financeApi, type CostSummary } from '../api/finance'
 import { fieldEventsApi, type FieldEvent } from '../api/field_events'
+import { sensorsApi } from '../api/sensors'
 import { SOIL_TYPE_LABELS, type Plot } from '../types/plot'
 import type { Task } from '../types/task'
 import { useSensorStream } from '../composables/useSensorStream'
@@ -39,8 +40,11 @@ const pendingTasks = computed(() =>
 )
 
 const recentTasks = computed(() => tasks.value.slice(0, 5))
-const recentDiagnoses = computed(() => diagnoses.value.slice(0, 3))
-
+const recentDiagnoses = computed(() =>
+  diagnoses.value
+    .filter((d) => d.status === 'complete')
+    .slice(0, 3),
+)
 // --- Live sensor stream ---
 const sensors = useSensorStream(plotId.value)
 
@@ -134,8 +138,34 @@ async function loadAll() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
+  // 1. Load plot metadata, tasks, diagnoses, costs, overrides
   loadAll()
+
+  // 2. Load 24h of hourly sensor history (from continuous aggregates).
+  //    This runs in parallel with the WebSocket connect — whichever
+  //    completes first, the seed() merge handles both orderings.
+  sensorsApi
+    .summary(plotId.value, '1h', '24h')
+    .then((buckets) => {
+      // Group buckets by metric
+      const byMetric: Record<string, { time: string; value: number }[]> = {}
+      for (const b of buckets) {
+        ;(byMetric[b.metric] ??= []).push({
+          time: b.bucket,
+          value: b.avg_value,
+        })
+      }
+      // Seed each metric's chart series
+      for (const [metric, points] of Object.entries(byMetric)) {
+        sensors.seed(metric, points)
+      }
+    })
+    .catch(() => {
+      // Silent — the live stream will still populate as data arrives
+    })
+
+  // 3. Connect the live stream
   sensors.connect()
 })
 </script>

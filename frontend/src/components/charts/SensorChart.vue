@@ -24,6 +24,18 @@ const props = defineProps<{
 
 const theme = useChartTheme()
 
+function formatTime(ms: number): string {
+  const d = new Date(ms)
+  const now = new Date()
+  const sameDay = d.toDateString() === now.toDateString()
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mm = String(d.getMinutes()).padStart(2, '0')
+  if (sameDay) return `${hh}:${mm}`
+  const mo = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${mo}-${dd} ${hh}:${mm}`
+}
+
 const option = computed(() => ({
   grid: { top: 15, right: 12, bottom: 30, left: 45 },
   tooltip: {
@@ -33,14 +45,20 @@ const option = computed(() => ({
     textStyle: { color: '#EBF0EE', fontSize: 12 },
     formatter: (params: any) => {
       const p = params[0]
-      const t = new Date(p.value[0]).toLocaleTimeString()
+      const t = new Date(p.value[0]).toLocaleString()
       return `${t}<br/><b>${p.value[1].toFixed(3)}</b> ${props.unit}`
     },
   },
   xAxis: {
     type: 'time',
     axisLine: { lineStyle: { color: theme.border.value } },
-    axisLabel: { color: theme.textMuted.value, fontSize: 11 },
+    axisTick: { show: false },
+    axisLabel: {
+      color: theme.textMuted.value,
+      fontSize: 11,
+      hideOverlap: true,
+      formatter: formatTime,
+    },
     splitLine: { show: false },
   },
   yAxis: {

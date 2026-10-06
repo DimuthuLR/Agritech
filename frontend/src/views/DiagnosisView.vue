@@ -20,10 +20,12 @@ onMounted(async () => {
 })
 
 const sortedDiagnoses = computed(() =>
-  [...diagStore.items].sort(
-    (a, b) =>
-      new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-  ),
+  diagStore.items
+    .filter((d) => d.status === 'complete')
+    .sort(
+      (a, b) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    ),
 )
 
 function onComplete(diag: Diagnosis) {

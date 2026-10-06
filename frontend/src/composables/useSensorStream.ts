@@ -32,6 +32,27 @@ export function useSensorStream(plotId: string) {
     series.value[metric] = arr
   }
 
+  function seed(
+    metric: string,
+    points: { time: string; value: number }[],
+  ) {
+    if (points.length === 0) return
+
+    const existing = series.value[metric] ?? []
+    const seen = new Set(existing.map((p) => p.time))
+
+    // Merge existing (live) with historical, dedupe by exact time,
+    // then sort ascending so the chart renders left-to-right.
+    const merged = [
+      ...existing,
+      ...points.filter((p) => !seen.has(p.time)),
+    ].sort(
+      (a, b) => new Date(a.time).getTime() - new Date(b.time).getTime(),
+    )
+
+    series.value[metric] = merged.slice(-CAP)
+  }
+
   function connect() {
     const token = localStorage.getItem('access_token')
     if (!token) {
@@ -77,5 +98,5 @@ export function useSensorStream(plotId: string) {
 
   onUnmounted(disconnect)
 
-  return { connected, error, series, connect, disconnect }
+  return { connected, error, series, connect, disconnect, seed }
 }
