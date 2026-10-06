@@ -15,7 +15,10 @@ import { sensorsApi } from '../api/sensors'
 import { SOIL_TYPE_LABELS, type Plot } from '../types/plot'
 import type { Task } from '../types/task'
 import { useSensorStream } from '../composables/useSensorStream'
-import SensorChart from '../components/charts/SensorChart.vue'
+import { defineAsyncComponent } from 'vue'
+const SensorChart = defineAsyncComponent(
+  () => import('../components/charts/SensorChart.vue')
+)
 import RecordOverrideModal from '../components/field_events/RecordOverrideModal.vue'
 
 const route = useRoute()
