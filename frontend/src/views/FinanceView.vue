@@ -3,8 +3,13 @@ import { computed, onMounted } from 'vue'
 import { Wallet, TrendingUp, Layers } from 'lucide-vue-next'
 import { useFinanceStore } from '../stores/finance'
 import { CATEGORY_META } from '../api/finance'
-import DonutChart from '../components/charts/DonutChart.vue'
-import TrendChart from '../components/charts/TrendChart.vue'
+import { defineAsyncComponent } from 'vue'
+const DonutChart = defineAsyncComponent(
+  () => import('../components/charts/DonutChart.vue')
+)
+const TrendChart = defineAsyncComponent(
+  () => import('../components/charts/TrendChart.vue')
+)
 
 const store = useFinanceStore()
 
