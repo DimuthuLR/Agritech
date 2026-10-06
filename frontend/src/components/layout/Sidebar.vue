@@ -24,7 +24,7 @@ interface NavItem {
   name: string
   label: string
   icon: LucideIcon
-  platformOnly?: boolean
+  tenantAdminOnly?: boolean
 }
 
 const items: NavItem[] = [
@@ -34,11 +34,16 @@ const items: NavItem[] = [
   { name: 'diagnosis', label: 'Diagnosis',  icon: Leaf },
   { name: 'finance',   label: 'Finance',    icon: Wallet },
   { name: 'chat',      label: 'Assistant',  icon: MessageCircle },
-  { name: 'admin',     label: 'Admin',      icon: Settings, platformOnly: true },
+  { name: 'admin',     label: 'Users',      icon: Settings, tenantAdminOnly: true },
 ]
 
 const visibleItems = computed(() =>
-  items.filter((i) => !i.platformOnly || auth.isPlatformUser),
+  items.filter((i) => {
+    if (i.tenantAdminOnly) {
+      return auth.user?.tenant_role === 'tenant_admin'
+    }
+    return true
+  }),
 )
 </script>
 
