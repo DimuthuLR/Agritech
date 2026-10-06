@@ -32,7 +32,7 @@ async function submit() {
     <div class="w-full max-w-sm card">
 
       <div class="flex items-center gap-2 mb-6">
-        <span class="w-8 h-8 rounded-sm bg-accent"></span>
+        <img src="/favicon.svg" alt="AgriTech Logo" class="w-8 h-8 rounded-sm" />
         <h1 class="text-xl font-semibold">AgriTech</h1>
       </div>
 
@@ -64,7 +64,6 @@ async function submit() {
         <div v-if="error" class="text-sm text-danger bg-danger/10 rounded-sm px-3 py-2">
           {{ error }}
         </div>
-
         <button type="submit" :disabled="loading" class="btn-primary w-full">
           {{ loading ? 'Signing in…' : 'Sign in' }}
         </button>
