@@ -47,9 +47,14 @@ class Settings(BaseSettings):
     mqtt_port: int = 1883
 
     # --- AI Models ---
+    # llama.cpp server (vision — Gemma 3, Qwen3-VL)
     llama_server_url: str = "http://127.0.0.1:8081/v1"
     llama_server_api_key: str = "not-needed"
     vision_model_name: str = "gemma-3-4b"
+
+    # Ollama (text reasoning — Qwen2.5 for both decision agent and chat)
+    ollama_base_url: str = "http://localhost:11434/v1"
+    ollama_api_key: str = "ollama"
 
 # Single shared instance. Import this everywhere.
 settings = Settings()

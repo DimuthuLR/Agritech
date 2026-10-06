@@ -22,6 +22,7 @@ from app.api.v1.diagnosis import router as diagnosis_router
 from app.api.v1.tasks import router as tasks_router
 from app.api.v1.finance import router as finance_router
 from app.api.v1.field_events import router as field_events_router
+from app.api.v1.chat import router as chat_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -84,3 +85,4 @@ app.include_router(diagnosis_router, prefix="/api/v1")
 app.include_router(tasks_router, prefix="/api/v1")
 app.include_router(finance_router, prefix="/api/v1")
 app.include_router(field_events_router, prefix="/api/v1")
+app.include_router(chat_router, prefix="/api/v1")
