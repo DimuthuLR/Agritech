@@ -48,7 +48,7 @@ class Settings(BaseSettings):
 
     # --- AI Models ---
     # llama.cpp server (vision — Gemma 3, Qwen3-VL)
-    llama_server_url: str = "http://127.0.0.1:8081/v1"
+    llama_server_url: str = "http://127.0.0.1:8080/v1"
     llama_server_api_key: str = "not-needed"
     vision_model_name: str = "gemma-3-4b"
 
