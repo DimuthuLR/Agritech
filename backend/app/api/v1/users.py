@@ -7,6 +7,10 @@ Only tenant_admins can manage users. Rules enforced here:
   3. No self-deactivation — prevents lockout.
   4. No self-demotion — same reason.
   5. Email uniqueness — enforced at the DB level, returned cleanly.
+
+Feature flag: 'users' gates every endpoint in this file. A tenant on a
+plan without user management can only ever have the accounts created
+for them at onboarding.
 """
 import uuid
 import logging
@@ -15,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_tenant_role
+from app.api.deps import require_tenant_role, require_feature
 from app.core.security import hash_password
 from app.db.models.user import User, TenantRole
 from app.db.session import get_db
@@ -40,6 +44,8 @@ def list_users(
     List all users in the caller's tenant, oldest first.
     Only tenant_admins can call this.
     """
+    require_feature(db, user.tenant_id, "users")
+
     return (
         db.query(User)
         .filter(User.tenant_id == user.tenant_id)
@@ -64,6 +70,8 @@ def create_user(
     The new user's tenant_id is derived from the caller's token — the
     client cannot place a user in a different tenant.
     """
+    require_feature(db, user.tenant_id, "users")
+
     # Fast path: check email uniqueness before hitting the DB constraint
     existing = db.query(User).filter(User.email == payload.email).first()
     if existing is not None:
@@ -112,6 +120,8 @@ def update_user(
 
     Self-lockout protection: you cannot deactivate or demote yourself.
     """
+    require_feature(db, current.tenant_id, "users")
+
     target = (
         db.query(User)
         .filter(User.id == user_id, User.tenant_id == current.tenant_id)

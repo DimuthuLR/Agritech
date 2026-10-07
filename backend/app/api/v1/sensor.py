@@ -9,6 +9,11 @@ HTTP:
 WebSocket:
     WS   /sensor/ws/{plot_id}      — live stream (JWT via query param)
 
+Feature flag: 'sensors' gates the tenant-facing query/summary/stream
+endpoints. The device ingest endpoint is intentionally ungated — devices
+keep reporting even if the tenant temporarily loses read access, so no
+readings are lost.
+
 Design note on WebSocket auth:
     Browsers cannot set custom headers on WebSocket connections. We accept
     the JWT as a query parameter. In production, prefer a short-lived,
@@ -27,7 +32,7 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from app.api.deps import require_tenant_role
+from app.api.deps import require_tenant_role, require_feature
 from app.core.device_auth import verify_device_signature
 from app.core.security import decode_token, TokenError
 from app.db.models.plot import Plot
@@ -41,13 +46,14 @@ from app.schemas.sensor import (
     SummaryBucket,
     VALID_METRICS,
 )
+from app.services import features_service as fs
 
 
 router = APIRouter(prefix="/sensor", tags=["sensor"])
 
 
 # ===========================================================================
-# HTTP — Ingest (device-authenticated)
+# HTTP — Ingest (device-authenticated, intentionally ungated)
 # ===========================================================================
 
 @router.post(
@@ -63,6 +69,10 @@ async def ingest_reading(request: Request, db: Session = Depends(get_db)):
       X-Device-Serial — the device's serial number
       X-Timestamp     — Unix timestamp (seconds)
       X-Signature     — HMAC-SHA256 hex of f"{serial}.{timestamp}.{raw_body}"
+
+    Note: this endpoint does NOT check the 'sensors' feature flag.
+    Devices keep reporting regardless — readings are preserved so they
+    can be seen again the moment the feature is re-enabled.
     """
     raw_body = await request.body()
 
@@ -128,6 +138,8 @@ def list_readings(
     limit: int = 500,
 ):
     """Query readings for the caller's tenant, newest first."""
+    require_feature(db, user.tenant_id, "sensors")
+
     q = db.query(SensorReading).filter(SensorReading.tenant_id == user.tenant_id)
 
     if device_id is not None:
@@ -175,6 +187,8 @@ def summary_readings(
     limit: int = 500,
 ):
     """Return pre-aggregated readings from a continuous aggregate view."""
+    require_feature(db, user.tenant_id, "sensors")
+
     from sqlalchemy import text
 
     if bucket not in ALLOWED_BUCKETS:
@@ -253,22 +267,38 @@ def _fetch_new_readings(
 def _lookup_plot_for_user(
     plot_id: uuid.UUID,
     user_id: uuid.UUID,
-) -> bool:
+) -> tuple[bool, str]:
     """
-    Return True if the plot exists and belongs to the user's tenant.
-    Runs in a thread pool.
+    Return (allowed, reason) for a WebSocket connect attempt.
+
+    Checks:
+      1. User exists and is active
+      2. Plot belongs to user's tenant
+      3. 'sensors' feature is enabled for the tenant
+
+    Runs in a thread pool so the async WS handler isn't blocked.
     """
     db = SessionLocal()
     try:
         user = db.get(User, user_id)
         if user is None or not user.is_active:
-            return False
+            return False, "unauthorized"
+
+        if user.tenant_id is None:
+            return False, "unauthorized"
+
+        if not fs.is_enabled(db, user.tenant_id, "sensors"):
+            return False, "feature_disabled"
+
         plot = (
             db.query(Plot)
             .filter(Plot.id == plot_id, Plot.tenant_id == user.tenant_id)
             .first()
         )
-        return plot is not None
+        if plot is None:
+            return False, "plot_not_found"
+
+        return True, "ok"
     finally:
         db.close()
 
@@ -278,11 +308,14 @@ async def sensor_stream(websocket: WebSocket, plot_id: uuid.UUID):
     """
     Live sensor reading stream for a plot.
 
-    Client connects with ?token=<JWT>. Server verifies the user owns the
-    plot, then streams new readings as they arrive (polling every 2s).
+    Client connects with ?token=<JWT>. Server verifies:
+      - the token is valid
+      - the user's tenant owns the plot
+      - the tenant's 'sensors' feature is enabled
 
     Close codes:
       4401 — missing or invalid token
+      4403 — feature disabled
       4404 — plot not found or not owned by caller
     """
     # --- Auth ---
@@ -298,10 +331,11 @@ async def sensor_stream(websocket: WebSocket, plot_id: uuid.UUID):
         await websocket.close(code=4401, reason="Invalid token")
         return
 
-    # --- Ownership check (threadpool; runs sync DB query) ---
-    owns = await run_in_threadpool(_lookup_plot_for_user, plot_id, user_id)
-    if not owns:
-        await websocket.close(code=4404, reason="Plot not found")
+    # --- Ownership + feature check (threadpool; sync DB queries) ---
+    allowed, reason = await run_in_threadpool(_lookup_plot_for_user, plot_id, user_id)
+    if not allowed:
+        code = 4403 if reason == "feature_disabled" else 4404
+        await websocket.close(code=code, reason=reason)
         return
 
     await websocket.accept()

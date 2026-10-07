@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.core.security import TokenError, decode_token
 from app.db.models.user import User, TenantRole, PlatformRole
 from app.db.session import get_db
+from app.services import features_service as fs
 
 
 # OAuth2PasswordBearer tells FastAPI to expect "Authorization: Bearer <token>".
@@ -161,3 +162,11 @@ def current_tenant_id(user: User = Depends(current_user)) -> uuid.UUID:
             detail="This endpoint requires a tenant context",
         )
     return user.tenant_id
+
+
+def require_feature(db, tenant_id, feature_key: str) -> None:
+    if not fs.is_enabled(db, tenant_id, feature_key):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Feature '{feature_key}' is not enabled for this tenant",
+        )

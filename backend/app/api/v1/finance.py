@@ -2,6 +2,8 @@
 Finance endpoints — cost summaries for plots and batches.
 
 Read-only for now. Uses ledger_service aggregations.
+
+Feature flag: 'finance' gates every endpoint in this file.
 """
 import uuid
 from datetime import datetime
@@ -9,7 +11,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_tenant_role
+from app.api.deps import require_tenant_role, require_feature
 from app.db.models.plot import Plot
 from app.db.models.user import User, TenantRole
 from app.db.session import get_db
@@ -33,6 +35,8 @@ def plot_cost_summary(
     Cost summary for a single plot. Tenant-scoped.
     Returns total_lkr and breakdown by category.
     """
+    require_feature(db, user.tenant_id, "finance")
+
     # Verify plot belongs to caller's tenant
     plot = (
         db.query(Plot)
@@ -52,6 +56,8 @@ def batch_cost_summary(
     db: Session = Depends(get_db),
 ):
     """Cost summary for a single crop batch. Tenant-scoped."""
+    require_feature(db, user.tenant_id, "finance")
+
     # Batch's tenant check via plot join
     from app.db.models.crop_batch import CropBatch
     batch = (
@@ -63,7 +69,6 @@ def batch_cost_summary(
         raise HTTPException(status_code=404, detail="Batch not found")
 
     return get_batch_cost(db, batch_id)
-
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +87,8 @@ def tenant_overview(
     Returns total, category breakdown, per-plot breakdown, and daily trend.
     Single call powers the whole Finance dashboard.
     """
+    require_feature(db, user.tenant_id, "finance")
+
     from datetime import datetime, timedelta, timezone
     from sqlalchemy import func
     from app.db.models.financial_ledger import FinancialLedger
@@ -165,6 +172,8 @@ def recent_ledger_entries(
     db: Session = Depends(get_db),
 ):
     """Recent ledger entries for the tenant, newest first."""
+    require_feature(db, user.tenant_id, "finance")
+
     from app.db.models.financial_ledger import FinancialLedger
     from app.db.models.plot import Plot
 

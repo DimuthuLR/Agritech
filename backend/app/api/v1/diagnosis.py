@@ -11,6 +11,7 @@ Security & safety:
 - Tenant isolation on disk: data/diagnoses/{tenant_id}/
 - Content-Type whitelist enforced before we touch disk
 - Tenant-scoped queries — you can only see your own diagnoses
+- Feature flag check: 'diagnosis' must be enabled for the tenant
 """
 import hashlib
 import logging
@@ -28,7 +29,7 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_tenant_role
+from app.api.deps import require_tenant_role, require_feature
 from app.db.models.diagnosis import Diagnosis
 from app.db.models.plot import Plot
 from app.db.models.user import User, TenantRole
@@ -131,6 +132,8 @@ async def upload_diagnosis(
       notes   — optional farmer notes (max 500 chars)
       file    — the image (JPEG/PNG/WebP, max 10 MB)
     """
+    require_feature(db, user.tenant_id, "diagnosis")
+
     # --- Content type check ---
     content_type = (file.content_type or "").lower()
     if content_type not in ALLOWED_CONTENT_TYPES:
@@ -225,6 +228,7 @@ def list_diagnoses(
     limit: int = 50,
 ):
     """List diagnoses for the caller's tenant."""
+    require_feature(db, user.tenant_id, "diagnosis")
     q = db.query(Diagnosis).filter(Diagnosis.tenant_id == user.tenant_id)
     if plot_id is not None:
         q = q.filter(Diagnosis.plot_id == plot_id)
@@ -246,6 +250,7 @@ def get_diagnosis(
     db: Session = Depends(get_db),
 ):
     """Fetch one diagnosis by ID."""
+    require_feature(db, user.tenant_id, "diagnosis")
     diag = (
         db.query(Diagnosis)
         .filter(

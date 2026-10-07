@@ -3,6 +3,8 @@ Device endpoints — tenant-scoped.
 
 Devices are physical sensors / actuators / gateways. Each has a secret_key
 used for HMAC signing of incoming readings.
+
+Feature flag: 'sensors' gates every endpoint in this file.
 """
 import uuid
 import secrets
@@ -10,7 +12,7 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_tenant_role
+from app.api.deps import require_tenant_role, require_feature
 from app.db.models.device import Device
 from app.db.models.plot import Plot
 from app.db.models.user import User, TenantRole
@@ -79,6 +81,8 @@ def create_device(
     Register a new device. The server generates a secret_key and returns it
     ONCE in this response. Save it — the API will never show it again.
     """
+    require_feature(db, user.tenant_id, "sensors")
+
     # If plot_id provided, verify ownership before accepting.
     if payload.plot_id is not None:
         _verify_plot_ownership(db, payload.plot_id, user.tenant_id)
@@ -121,6 +125,8 @@ def list_devices(
     limit: int = 100,
 ):
     """List devices for the caller's tenant, with optional filters."""
+    require_feature(db, user.tenant_id, "sensors")
+
     q = db.query(Device).filter(Device.tenant_id == user.tenant_id)
     if plot_id is not None:
         q = q.filter(Device.plot_id == plot_id)
@@ -138,6 +144,8 @@ def get_device(
     user: User = Depends(require_tenant_role(TenantRole.VIEWER)),
     db: Session = Depends(get_db),
 ):
+    require_feature(db, user.tenant_id, "sensors")
+
     device = (
         db.query(Device)
         .filter(Device.id == device_id, Device.tenant_id == user.tenant_id)
@@ -155,6 +163,8 @@ def update_device(
     user: User = Depends(require_tenant_role(TenantRole.OPERATOR)),
     db: Session = Depends(get_db),
 ):
+    require_feature(db, user.tenant_id, "sensors")
+
     device = (
         db.query(Device)
         .filter(Device.id == device_id, Device.tenant_id == user.tenant_id)
@@ -195,6 +205,8 @@ def delete_device(
     Hard-delete a device. Cascades to its sensor_readings.
     If you want to preserve readings, PATCH is_active=false instead.
     """
+    require_feature(db, user.tenant_id, "sensors")
+
     device = (
         db.query(Device)
         .filter(Device.id == device_id, Device.tenant_id == user.tenant_id)
@@ -218,6 +230,8 @@ def rotate_secret(
     Generate a new secret_key for a device. The old secret is invalidated
     immediately. Returns the new secret once — save it.
     """
+    require_feature(db, user.tenant_id, "sensors")
+
     device = (
         db.query(Device)
         .filter(Device.id == device_id, Device.tenant_id == user.tenant_id)

@@ -1,9 +1,10 @@
 """
 Authentication endpoints: login and current-user info.
 
-- POST /auth/login  → JSON body {email, password}      (frontend)
-- POST /auth/token  → OAuth2 form {username, password} (Swagger)
-- GET  /auth/me     → Bearer token → user profile
+- POST /auth/login        → JSON body {email, password}      (frontend)
+- POST /auth/token        → OAuth2 form {username, password} (Swagger)
+- GET  /auth/me           → Bearer token → user profile
+- GET  /auth/me/features  → Bearer token → feature map for the caller's tenant
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -15,6 +16,7 @@ from app.core.security import create_access_token, verify_password
 from app.db.models.user import User
 from app.db.session import get_db
 from app.schemas.auth import LoginRequest, LoginResponse, MeResponse, TokenResponse
+from app.services import features_service as fs
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -87,7 +89,7 @@ def token(
     OAuth2 form login. Used by Swagger's Authorize button.
     `username` is treated as the email.
     """
-    user = _authenticate(db, email=form_data.username, password=form_data.password)
+    user = _authenticate(db, form_data.username, form_data.password)
     token = _issue_token(user)
     return TokenResponse(
         access_token=token,
@@ -101,3 +103,22 @@ def me(user: User = Depends(current_user)):
     Return the authenticated user's public profile. Requires Bearer token.
     """
     return MeResponse.model_validate(user)
+
+
+@router.get("/me/features")
+def my_features(
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Return a flat {feature_key: enabled} map for the caller's tenant.
+
+    Used by the frontend to hide menu items and routes when a feature
+    is off. Platform users (no tenant_id) get an empty map — the
+    frontend treats missing keys as enabled, so platform users see
+    everything (they use separate platform routes anyway).
+    """
+    if user.tenant_id is None:
+        return {}
+    features = fs.list_features(db, user.tenant_id)
+    return {key: info["enabled"] for key, info in features.items()}

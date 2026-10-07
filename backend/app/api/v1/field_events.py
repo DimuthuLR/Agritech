@@ -7,6 +7,8 @@ app/scripts/verify_overrides.py).
 
 The AI never modifies the gate based on these events. It only *sees*
 them in its reasoning context (Layer 2 of the safe learning model).
+
+Feature flag: 'feedback' gates every endpoint in this file.
 """
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -14,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import require_tenant_role
+from app.api.deps import require_tenant_role, require_feature
 from app.db.models.field_event import FieldEvent, FieldEventType
 from app.db.models.plot import Plot
 from app.db.models.user import User, TenantRole
@@ -45,6 +47,8 @@ def create_override(
 
     Tenant-scoped: the plot must belong to the caller's tenant.
     """
+    require_feature(db, user.tenant_id, "feedback")
+
     # Verify plot ownership
     plot = (
         db.query(Plot)
@@ -80,6 +84,8 @@ def list_events(
     limit: int = Query(50, ge=1, le=200),
 ):
     """List field events for the caller's tenant, newest first."""
+    require_feature(db, user.tenant_id, "feedback")
+
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
     q = (
