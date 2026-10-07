@@ -25,22 +25,26 @@ interface NavItem {
   label: string
   icon: LucideIcon
   tenantAdminOnly?: boolean
+  feature?: string
 }
 
 const items: NavItem[] = [
   { name: 'dashboard', label: 'Dashboard',  icon: LayoutDashboard },
   { name: 'plots',     label: 'Plots',      icon: Sprout },
   { name: 'tasks',     label: 'Tasks',      icon: CheckSquare },
-  { name: 'diagnosis', label: 'Diagnosis',  icon: Leaf },
-  { name: 'finance',   label: 'Finance',    icon: Wallet },
-  { name: 'chat',      label: 'Assistant',  icon: MessageCircle },
-  { name: 'admin',     label: 'Users',      icon: Settings, tenantAdminOnly: true },
+  { name: 'diagnosis', label: 'Diagnosis',  icon: Leaf,         feature: 'diagnosis' },
+  { name: 'finance',   label: 'Finance',    icon: Wallet,       feature: 'finance' },
+  { name: 'chat',      label: 'Assistant',  icon: MessageCircle, feature: 'chat' },
+  { name: 'admin',     label: 'Users',      icon: Settings,     tenantAdminOnly: true, feature: 'users' },
 ]
 
 const visibleItems = computed(() =>
   items.filter((i) => {
-    if (i.tenantAdminOnly) {
-      return auth.user?.tenant_role === 'tenant_admin'
+    if (i.tenantAdminOnly && auth.user?.tenant_role !== 'tenant_admin') {
+      return false
+    }
+    if (i.feature && !auth.hasFeature(i.feature)) {
+      return false
     }
     return true
   }),

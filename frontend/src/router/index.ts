@@ -22,13 +22,17 @@ const routes: RouteRecordRaw[] = [
       { path: 'tasks', name: 'tasks',
         component: () => import('../views/TasksView.vue') },
       { path: 'diagnosis', name: 'diagnosis',
-        component: () => import('../views/DiagnosisView.vue') },
+        component: () => import('../views/DiagnosisView.vue'),
+        meta: { feature: 'diagnosis' } },
       { path: 'finance', name: 'finance',
-        component: () => import('../views/FinanceView.vue') },
+        component: () => import('../views/FinanceView.vue'),
+        meta: { feature: 'finance' } },
       { path: 'chat', name: 'chat',
-        component: () => import('../views/ChatView.vue') },
+        component: () => import('../views/ChatView.vue'),
+        meta: { feature: 'chat' } },
       { path: 'admin', name: 'admin',
-        component: () => import('../views/AdminView.vue') },
+        component: () => import('../views/AdminView.vue'),
+        meta: { feature: 'users' } },
     ],
   },
   { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
@@ -57,6 +61,14 @@ router.beforeEach((to) => {
 
   // Platform-only pages require a platform user
   if (to.meta.platformOnly && !auth.isPlatformUser) {
+    return { name: 'dashboard' }
+  }
+
+  // Feature-flagged routes: redirect to dashboard if the tenant
+  // doesn't have this feature enabled. `hasFeature` fails open
+  // pre-load, so this is safe even on the first navigation.
+  const requiredFeature = to.meta.feature as string | undefined
+  if (requiredFeature && !auth.hasFeature(requiredFeature)) {
     return { name: 'dashboard' }
   }
 
