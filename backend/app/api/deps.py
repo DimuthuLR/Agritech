@@ -21,6 +21,7 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
 from app.core.security import TokenError, decode_token
+from app.db.models.tenant import Tenant
 from app.db.models.user import User, TenantRole, PlatformRole
 from app.db.session import get_db
 from app.services import features_service as fs
@@ -106,10 +107,18 @@ def require_tenant_role(min_role: TenantRole) -> Callable[[User], User]:
     """
     Factory: returns a dependency that ensures the current user is a TENANT
     user with at least the given role. Platform users are rejected.
+
+    Also enforces tenant suspension: if the caller's tenant has
+    is_active=False, this returns 403. Auth endpoints (login, /me) bypass
+    this check because they use current_user directly, so suspended users
+    can still log in and see a "suspended" message.
     """
     min_level = TENANT_ROLE_ORDER[min_role]
 
-    def _dep(user: User = Depends(current_user)) -> User:
+    def _dep(
+        user: User = Depends(current_user),
+        db: Session = Depends(get_db),
+    ) -> User:
         if user.tenant_id is None or user.tenant_role is None:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -120,6 +129,18 @@ def require_tenant_role(min_role: TenantRole) -> Callable[[User], User]:
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Requires tenant role >= {min_role.value}",
             )
+
+        # Tenant suspension check.
+        tenant = db.get(Tenant, user.tenant_id)
+        if tenant is not None and not tenant.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "Your account has been suspended. "
+                    "Please contact support to restore access."
+                ),
+            )
+
         return user
 
     return _dep
