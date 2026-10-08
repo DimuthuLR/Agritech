@@ -53,6 +53,13 @@ class TokenError(Exception):
     """Raised when a token is missing, malformed, expired, or tampered with."""
 
 
+# Impersonation tokens live longer than normal access tokens because a
+# support session is often a 30-60 min debugging back-and-forth. The
+# session itself can be ended at any time, which immediately revokes
+# the token (checked in deps.current_user).
+IMPERSONATION_TTL_MIN = 120
+
+
 def create_access_token(
     subject: str,
     extra_claims: dict[str, Any] | None = None,
@@ -80,11 +87,59 @@ def create_access_token(
     return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
 
 
-def decode_token(token: str) -> dict[str, Any]:
+def create_impersonation_token(
+    *,
+    target_user_id: str,
+    target_email: str,
+    target_tenant_id: str | None,
+    target_tenant_role: str | None,
+    platform_user_id: str,
+    support_session_id: str,
+    ttl_minutes: int = IMPERSONATION_TTL_MIN,
+) -> str:
+    """
+    Create an impersonation token for a support session.
+
+    The token's `sub` is the TARGET user, so downstream code (all the
+    tenant-scoped routes) works unchanged: it sees the target user, in
+    the target tenant, with the target's role.
+
+    Extra claims carry the audit trail:
+      - impersonated_by: platform user's UUID
+      - support_session_id: the row in support_sessions
+    """
+    now = datetime.now(timezone.utc)
+    payload: dict[str, Any] = {
+        "sub": target_user_id,
+        "iat": now,
+        "exp": now + timedelta(minutes=ttl_minutes),
+        "typ": "impersonation",
+        "email": target_email,
+        "tenant_id": target_tenant_id,
+        "tenant_role": target_tenant_role,
+        "platform_role": None,
+        "impersonated_by": platform_user_id,
+        "support_session_id": support_session_id,
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
+
+
+def decode_token(
+    token: str,
+    expected_types: set[str] | None = None,
+) -> dict[str, Any]:
     """
     Decode and validate a JWT. Raises TokenError on any problem:
-    bad signature, expired, wrong algorithm, missing required claim.
+    bad signature, expired, wrong algorithm, missing required claim,
+    or unexpected `typ`.
+
+    expected_types: which `typ` values to accept. Defaults to {"access"}
+    so existing call sites work unchanged. Pass a broader set (e.g.
+    {"access", "impersonation"}) for routes that must accept either.
     """
+    if expected_types is None:
+        expected_types = {"access"}
+
     try:
         payload = jwt.decode(
             token,
@@ -95,7 +150,8 @@ def decode_token(token: str) -> dict[str, Any]:
     except JWTError as e:
         raise TokenError(str(e)) from e
 
-    if payload.get("typ") != "access":
-        raise TokenError(f"Unexpected token type: {payload.get('typ')!r}")
+    typ = payload.get("typ")
+    if typ not in expected_types:
+        raise TokenError(f"Unexpected token type: {typ!r}")
 
     return payload

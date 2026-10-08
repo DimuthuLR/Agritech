@@ -13,6 +13,7 @@ Usage in a route:
     ):
         ...
 """
+import logging
 import uuid
 from typing import Callable
 
@@ -21,10 +22,14 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
 from app.core.security import TokenError, decode_token
+from app.db.models.support_session import SupportSession
 from app.db.models.tenant import Tenant
 from app.db.models.user import User, TenantRole, PlatformRole
 from app.db.session import get_db
 from app.services import features_service as fs
+
+
+log = logging.getLogger(__name__)
 
 
 # OAuth2PasswordBearer tells FastAPI to expect "Authorization: Bearer <token>".
@@ -56,7 +61,12 @@ def current_user(
     """
     Resolve the Bearer token into a User object.
 
-    Raises 401 if: no token, bad token, expired token, or user not found/inactive.
+    Accepts both normal access tokens and impersonation tokens.
+    Impersonation tokens resolve to the TARGET user, but validate the
+    underlying support session is still open and log every request.
+
+    Raises 401 if: no token, bad token, expired, or user not found/inactive.
+    Raises 403 if: user inactive, tenant suspended, or session ended.
     """
     if not token:
         raise HTTPException(
@@ -66,7 +76,9 @@ def current_user(
         )
 
     try:
-        payload = decode_token(token)
+        payload = decode_token(
+            token, expected_types={"access", "impersonation"}
+        )
     except TokenError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -95,6 +107,44 @@ def current_user(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User is inactive",
+        )
+
+    # --- Impersonation path ---
+    # If this is an impersonation token, verify the underlying session
+    # is still open. Every impersonated request gets a WARNING log line
+    # so the audit trail shows the actual actions taken during a session.
+    if payload.get("typ") == "impersonation":
+        session_id_str = payload.get("support_session_id")
+        try:
+            session_id = uuid.UUID(session_id_str)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid impersonation session id",
+            )
+
+        session = db.get(SupportSession, session_id)
+        if session is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Impersonation session not found",
+            )
+        if session.ended_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Impersonation session has ended. Start a new one.",
+            )
+        if session.target_user_id != user.id:
+            # Token/session mismatch — should never happen, but be strict.
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Impersonation session mismatch",
+            )
+
+        log.warning(
+            f"[impersonation] session={session.id} "
+            f"actor_user={session.platform_user_id} "
+            f"acting_as={user.email} ({user.id})"
         )
 
     return user
@@ -150,6 +200,10 @@ def require_platform_role(min_role: PlatformRole) -> Callable[[User], User]:
     """
     Factory: returns a dependency that ensures the current user is a PLATFORM
     user with at least the given role. Tenant users are rejected.
+
+    Impersonation tokens resolve to the TARGET user (a tenant user), so
+    they can never pass this check — platform routes stay locked even
+    while a support session is active.
     """
     min_level = PLATFORM_ROLE_ORDER[min_role]
 
