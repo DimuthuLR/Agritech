@@ -17,6 +17,7 @@ from app.db.models.input_price import InputPrice, InputCategory
 from app.db.models.financial_ledger import FinancialLedger, LedgerCategory
 from app.db.models.field_event import FieldEvent, FieldEventType, FieldEventOutcome
 from app.db.models.audit_log import AuditLog
+from app.db.models.knowledge_document import KnowledgeDocument
 
 __all__ = [
     "Tenant", "TenantFeature",
