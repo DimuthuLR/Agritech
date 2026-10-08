@@ -147,7 +147,7 @@ def _call_gemini_once(
                 config=types.GenerateContentConfig(
                     system_instruction=SYSTEM_INSTRUCTION,
                     temperature=0.2,
-                    max_output_tokens=1500,
+                    max_output_tokens=8192,
                     response_mime_type="application/json",
                 ),
             )

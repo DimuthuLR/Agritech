@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     vision_model_name: str = "gemma-3-4b"
 
         # --- Cloud vision (Phase 9.85f) ---
-    gemini_api_key: str = "AQ.Ab8RN6I2YSjJuB4uxDMSwPx1GXwBtEtBJqZfdmsDNORUBSpxNA"
+    gemini_api_key: str = "AQ.Ab8RN6KE_5lce-7W9lELhTekSzWbu11psATrICWvlG8SJOy4-g"
     vision_provider: str = "auto"  # "auto" | "cloud" | "local"
 
     # Ollama (text reasoning — Qwen2.5 for both decision agent and chat)
