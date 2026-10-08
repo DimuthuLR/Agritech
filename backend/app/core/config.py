@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     llama_server_api_key: str = "not-needed"
     vision_model_name: str = "gemma-3-4b"
 
+        # --- Cloud vision (Phase 9.85f) ---
+    gemini_api_key: str = "AQ.Ab8RN6I2YSjJuB4uxDMSwPx1GXwBtEtBJqZfdmsDNORUBSpxNA"
+    vision_provider: str = "auto"  # "auto" | "cloud" | "local"
+
     # Ollama (text reasoning — Qwen2.5 for both decision agent and chat)
     ollama_base_url: str = "http://localhost:11434/v1"
     ollama_api_key: str = "ollama"

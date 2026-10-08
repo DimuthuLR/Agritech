@@ -231,13 +231,39 @@ def diagnose_image(
     reference_chunks: str = "",
 ) -> DiagnosisResult:
     """
-    Send image to the vision model, get back a structured diagnosis.
+    Route to cloud (Gemini) or local (Qwen3-VL) based on VISION_PROVIDER.
 
-    If reference_chunks is non-empty, it's appended to the system prompt
-    as RAG context.
-
-    Raises DiagnosisError on unrecoverable failure.
+    - "auto": try cloud first; on any failure, fall back to local.
+    - "cloud": cloud only; failure raises.
+    - "local": local only.
     """
+    provider = (settings.vision_provider or "auto").lower()
+
+    if provider in ("auto", "cloud"):
+        try:
+            from app.services.cloud_vision_service import diagnose_cloud
+            result = diagnose_cloud(image_bytes, plot_crop, notes, reference_chunks)
+            log.info(f"[vision] cloud ({result.model}) → {result.disease}")
+            return result
+        except Exception as e:
+            log.warning(f"[vision] cloud failed: {e}")
+            if provider == "cloud":
+                raise DiagnosisError(f"Cloud vision unavailable: {e}") from e
+            log.info("[vision] falling back to local model")
+
+    # Local path (either provider == "local", or auto-fallback)
+    result = _diagnose_image_local(image_bytes, plot_crop, notes, reference_chunks)
+    log.info(f"[vision] local ({result.model}) → {result.disease}")
+    return result
+
+
+def _diagnose_image_local(
+    image_bytes: bytes,
+    plot_crop: str | None = None,
+    notes: str | None = None,
+    reference_chunks: str = "",
+) -> DiagnosisResult:
+    """Original local llama-server call. Kept as a private function."""
     client = _get_client()
 
     b64 = base64.b64encode(image_bytes).decode("ascii")
