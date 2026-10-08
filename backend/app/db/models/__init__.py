@@ -18,6 +18,8 @@ from app.db.models.financial_ledger import FinancialLedger, LedgerCategory
 from app.db.models.field_event import FieldEvent, FieldEventType, FieldEventOutcome
 from app.db.models.audit_log import AuditLog
 from app.db.models.knowledge_document import KnowledgeDocument
+from app.db.models.support_session import SupportSession
+from app.db.models.chat_session import ChatSession
 
 __all__ = [
     "Tenant", "TenantFeature",
@@ -30,5 +32,6 @@ __all__ = [
     "InputPrice", "InputCategory",
     "FinancialLedger", "LedgerCategory",
     "FieldEvent", "FieldEventType", "FieldEventOutcome",
-    "AuditLog",
+    "AuditLog", "KnowledgeDocument",
+    "SupportSession", "ChatSession",
 ]
