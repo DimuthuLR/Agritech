@@ -11,6 +11,7 @@ export default {
         'bg':          'rgb(var(--bg) / <alpha-value>)',
         'card':        'rgb(var(--card) / <alpha-value>)',
         'card-hover':  'rgb(var(--card-hover) / <alpha-value>)',
+        'surface':     'rgb(var(--surface) / <alpha-value>)',
         'border':      'rgb(var(--border) / <alpha-value>)',
 
         'text':        'rgb(var(--text) / <alpha-value>)',

@@ -3,12 +3,12 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../../stores/auth'
 import ThemeToggle from './ThemeToggle.vue'
-
 import { Menu } from 'lucide-vue-next'
 
 const emit = defineEmits<{ 'toggle-sidebar': [] }>()
 const auth = useAuthStore()
 const router = useRouter()
+
 const showUserMenu = ref(false)
 
 function toggleUserMenu() {
@@ -22,7 +22,8 @@ function logout() {
 </script>
 
 <template>
-  <header class="h-16 border-b border-border bg-card flex items-center px-4 gap-4">
+  <header class="h-16 border-b border-border bg-surface flex items-center px-6 gap-4
+                 shadow-[0_1px_2px_rgb(0_0_0_/_0.03)]">
     <!-- Hamburger for mobile -->
     <button
       class="md:hidden text-muted hover:text-text"
@@ -55,10 +56,8 @@ function logout() {
         </span>
       </button>
 
-      <!-- Invisible backdrop to close menu when clicking elsewhere -->
       <div v-if="showUserMenu" class="fixed inset-0 z-40" @click="showUserMenu = false"></div>
 
-      <!-- Dropdown -->
       <div v-if="showUserMenu" class="absolute right-0 top-full mt-2 w-48 card z-50 p-1">
         <button
           class="w-full text-left px-3 py-2 rounded-sm text-sm

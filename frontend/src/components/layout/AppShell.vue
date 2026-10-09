@@ -26,7 +26,7 @@ onMounted(async () => {
     <div class="flex flex-1 min-h-0">
       <Sidebar :open="sidebarOpen" @close="sidebarOpen = false" />
 
-      <main class="flex-1 min-w-0 overflow-y-auto">
+      <main class="flex-1 min-w-0 overflow-y-auto p-6 md:p-8">
         <router-view />
       </main>
     </div>

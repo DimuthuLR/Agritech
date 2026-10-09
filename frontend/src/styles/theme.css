@@ -9,6 +9,7 @@
   --bg:          246 243 237;   /* warm cream */
   --card:        255 255 255;
   --card-hover:  244 241 234;
+  --surface:     250 247 242;
   --surface-2:   255 255 255;   /* topbar */
   --border:      234 229 218;
   --border-soft: 240 236 228;
@@ -45,6 +46,7 @@
   --bg:           11  13  16;   /* deep charcoal-blue */
   --card:         22  26  31;
   --card-hover:   30  34  40;
+  --surface:      18  22  27;
   --surface-2:    18  22  27;   /* topbar */
   --border:       38  42  48;
   --border-soft:  30  34  39;

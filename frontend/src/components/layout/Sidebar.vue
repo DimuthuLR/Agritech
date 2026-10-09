@@ -68,7 +68,8 @@ const visibleItems = computed(() => {
     :class="[
       'fixed md:static inset-y-0 left-0 z-40 md:z-auto',
       'w-64 flex flex-col py-5 transition-transform duration-200',
-      'bg-card border-r border-border',
+      'bg-surface border-r border-border',
+      'shadow-[1px_0_2px_rgb(0_0_0_/_0.02)]',
       open ? 'translate-x-0' : '-translate-x-full md:translate-x-0',
     ]"
   >
