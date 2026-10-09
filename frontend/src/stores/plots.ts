@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { plotsApi } from '../api/plots'
+import { useAuthStore } from './auth'
 import type { Plot, CreatePlotInput } from '../types/plot'
 
 export const usePlotsStore = defineStore('plots', () => {
@@ -26,13 +27,27 @@ export const usePlotsStore = defineStore('plots', () => {
   )
 
   async function fetchAll(): Promise<void> {
+    const auth = useAuthStore()
+    // Platform users have no tenant — skip the tenant-scoped fetch.
+    if (!auth.user?.tenant_id) {
+      plots.value = []
+      return
+    }
+
     loading.value = true
     error.value = null
     try {
       plots.value = await plotsApi.list()
     } catch (e: any) {
-      error.value = e?.response?.data?.detail || 'Failed to load plots'
-      plots.value = []
+      // Suspended tenant: backend returns 403. Treat as empty list so
+      // the sidebar/dashboard don't blow up with an error toast. The
+      // suspended-user banner handles the messaging.
+      if (e?.response?.status === 403) {
+        plots.value = []
+      } else {
+        error.value = e?.response?.data?.detail || 'Failed to load plots'
+        plots.value = []
+      }
     } finally {
       loading.value = false
     }
