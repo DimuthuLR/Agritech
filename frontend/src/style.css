@@ -1,3 +1,11 @@
+/* Dark mode override for the ambient background gradient.
+   Sits outside @layer so it always loads. */
+[data-theme="dark"] .bg-app-gradient {
+  background-image:
+    radial-gradient(circle at 0% 0%, rgba(110, 200, 130, 0.30), transparent 60%),
+    radial-gradient(circle at 100% 100%, rgba(66, 133, 173, 0.22), transparent 65%);
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -23,8 +31,6 @@
 }
 
 @layer components {
-
-  /* ---- Card ---- */
   .card {
     @apply bg-card border border-border rounded p-6;
     box-shadow:
@@ -32,35 +38,23 @@
       0 8px 24px -12px rgb(var(--shadow-color) / var(--shadow-opacity));
   }
 
-  /* ---- Solid-tone hero cards ---- */
   .card-solid-accent {
     @apply rounded p-6 text-white;
     background-color: rgb(var(--accent));
-    box-shadow:
-      0 1px 2px rgb(var(--shadow-color) / calc(var(--shadow-opacity) * 0.5)),
-      0 12px 32px -12px rgb(var(--accent) / 0.4);
   }
   .card-solid-water {
     @apply rounded p-6 text-white;
     background-color: rgb(var(--water));
-    box-shadow:
-      0 1px 2px rgb(var(--shadow-color) / calc(var(--shadow-opacity) * 0.5)),
-      0 12px 32px -12px rgb(var(--water) / 0.4);
   }
   .card-solid-warning {
     @apply rounded p-6 text-white;
     background-color: rgb(var(--warning));
-    box-shadow:
-      0 1px 2px rgb(var(--shadow-color) / calc(var(--shadow-opacity) * 0.5)),
-      0 12px 32px -12px rgb(var(--warning) / 0.4);
   }
 
-  /* ---- Tinted cards ---- */
   .card-tint-accent  { @apply card; }
   .card-tint-water   { @apply card; }
   .card-tint-warning { @apply card; }
 
-  /* ---- Stat icon badges ---- */
   .stat-icon {
     @apply w-10 h-10 rounded-full flex items-center justify-center shrink-0;
     background-color: rgb(var(--card-hover));
@@ -70,7 +64,6 @@
   .stat-icon-warning { @apply stat-icon; color: rgb(var(--warning)); }
   .stat-icon-danger  { @apply stat-icon; color: rgb(var(--danger)); }
 
-  /* ---- Sidebar nav ---- */
   .nav-item {
     @apply flex items-center gap-3 px-3 py-2.5 rounded-sm text-sm
            text-muted hover:text-text transition-colors;
@@ -83,7 +76,6 @@
     background-color: rgb(var(--accent-soft));
   }
 
-  /* ---- Buttons ---- */
   .btn {
     @apply inline-flex items-center justify-center gap-2
            px-4 py-2.5 rounded-sm text-sm font-medium
@@ -107,7 +99,6 @@
     filter: brightness(1.08);
   }
 
-  /* ---- Input ---- */
   .input {
     @apply w-full px-3.5 py-2.5 rounded-sm
            bg-card border border-border
@@ -116,7 +107,6 @@
            transition-colors;
   }
 
-  /* ---- Pills ---- */
   .pill {
     @apply inline-flex items-center gap-1.5
            px-2.5 py-1 rounded-full text-xs font-medium;
@@ -126,18 +116,13 @@
   .pill-danger  { @apply pill bg-danger/10  text-danger; }
   .pill-muted   { @apply pill bg-card-hover text-muted; }
 
-  /* ---- Hover lift for clickable cards ---- */
   .hover-lift {
     @apply transition-all duration-200;
   }
   .hover-lift:hover {
     transform: translateY(-2px);
-    box-shadow:
-      0 2px 4px rgb(var(--shadow-color) / calc(var(--shadow-opacity) * 0.6)),
-      0 16px 40px -16px rgb(var(--shadow-color) / calc(var(--shadow-opacity) * 1.5));
   }
 
-  /* ---- Page header ---- */
   .page-title {
     @apply text-3xl font-bold tracking-tight;
   }

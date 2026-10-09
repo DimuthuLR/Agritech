@@ -1,0 +1,48 @@
+/* ==========================================================================
+   Theme tokens — all colors in one place.
+   To rebrand the platform, edit ONLY this file.
+   Values are "R G B" triplets so Tailwind can do opacity modifiers.
+   ========================================================================== */
+
+:root {
+  /* ---- Light theme ---- */
+  --bg:          245 247 246;   /* #F5F7F6 */
+  --card:        255 255 255;   /* #FFFFFF */
+  --card-hover:  240 244 242;
+  --border:      225 230 228;   /* #E1E6E4 */
+
+  --text:         15  20  18;   /* #0F1412 */
+  --text-muted:   95 107 103;   /* #5F6B67 */
+  --text-invert: 255 255 255;
+
+  --accent:        4 120  87;   /* #047857 */
+  --accent-soft: 232 243 239;
+  --water:         3 105 161;   /* #0369A1 */
+
+  --success:       5 150 105;
+  --warning:     217 119   6;
+  --danger:      220  38  38;
+
+  --radius:     14px;
+  --radius-sm:   8px;
+}
+
+[data-theme="dark"] {
+  /* ---- Dark theme ---- */
+  --bg:           11  15  14;   /* #0B0F0E */
+  --card:         20  26  24;   /* #141A18 */
+  --card-hover:   27  34  32;   /* #1B2220 */
+  --border:       36  43  41;   /* #242B29 */
+
+  --text:        235 240 238;   /* #EBF0EE */
+  --text-muted:  138 151 147;   /* #8A9793 */
+  --text-invert:  11  15  14;
+
+  --accent:       34 197  94;   /* #22C55E */
+  --accent-soft:  16  46  33;
+  --water:        56 189 248;   /* #38BDF8 */
+
+  --success:      34 197  94;
+  --warning:     251 191  36;
+  --danger:      239  68  68;
+}

@@ -161,11 +161,6 @@ const firstName = computed(() =>
   (auth.user?.full_name || auth.user?.email || '').split(/[@\s]/)[0] || 'farmer',
 )
 
-const farmName = computed(() => {
-  // If the first plot belongs to a farm, we could show its name
-  // but we don't load farms on this page. Show tenant-less greeting.
-  return 'Demo Farm'
-})
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 function humanTool(t: string): string {
@@ -198,11 +193,6 @@ function fmtCurrency(n: number): string {
   return `LKR ${Math.round(n).toLocaleString()}`
 }
 
-function fmtDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, {
-    month: 'short', day: 'numeric',
-  })
-}
 
 function healthFor(status: PlotStatus): { label: string; tone: string; icon: any } {
   const d = status.latestDiagnosis

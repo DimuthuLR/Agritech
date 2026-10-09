@@ -20,13 +20,13 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-bg text-text flex flex-col">
+  <div class="min-h-screen bg-app-gradient flex flex-col">
     <TopBar @toggle-sidebar="sidebarOpen = !sidebarOpen" />
 
-    <div class="flex flex-1 overflow-hidden">
+    <div class="flex flex-1 min-h-0">
       <Sidebar :open="sidebarOpen" @close="sidebarOpen = false" />
 
-      <main class="flex-1 overflow-y-auto p-4 md:p-6">
+      <main class="flex-1 min-w-0 overflow-y-auto">
         <router-view />
       </main>
     </div>

@@ -34,18 +34,19 @@ const tenantItems: NavItem[] = [
   { name: 'dashboard', label: 'Dashboard',  icon: LayoutDashboard },
   { name: 'plots',     label: 'Plots',      icon: Sprout },
   { name: 'tasks',     label: 'Tasks',      icon: CheckSquare },
-  { name: 'diagnosis', label: 'Diagnosis',  icon: Leaf,          feature: 'diagnosis' },
-  { name: 'finance',   label: 'Finance',    icon: Wallet,        feature: 'finance' },
+  { name: 'diagnosis', label: 'Diagnosis',  icon: Leaf,         feature: 'diagnosis' },
+  { name: 'finance',   label: 'Finance',    icon: Wallet,       feature: 'finance' },
   { name: 'chat',      label: 'Assistant',  icon: MessageCircle, feature: 'chat' },
-  { name: 'admin',     label: 'Users',      icon: Settings,      tenantAdminOnly: true, feature: 'users' },
+  { name: 'admin',     label: 'Users',      icon: Settings,     tenantAdminOnly: true, feature: 'users' },
 ]
 
 const platformItems: NavItem[] = [
-  { name: 'platform-dashboard', label: 'Platform', icon: Server },
-  { name: 'platform-sessions',  label: 'Support',  icon: UsersIcon },
+  { name: 'platform-dashboard', label: 'Platform',   icon: Server },
+  { name: 'platform-sessions',  label: 'Support',    icon: UsersIcon },
 ]
 
 const visibleItems = computed(() => {
+  // Platform users see only the platform sidebar.
   if (auth.isPlatformUser) {
     return platformItems
   }
@@ -67,39 +68,27 @@ const visibleItems = computed(() => {
   <aside
     :class="[
       'fixed md:static inset-y-0 left-0 z-40 md:z-auto',
-      'w-64 flex flex-col py-5 transition-transform duration-200',
-      'bg-card border-r border-border',
+      'w-64 bg-card border-r border-border',
+      'flex flex-col py-4 transition-transform duration-200',
       open ? 'translate-x-0' : '-translate-x-full md:translate-x-0',
     ]"
   >
-    <nav class="flex flex-col gap-1 px-3">
+    <nav class="flex flex-col gap-1 px-2">
       <router-link
         v-for="item in visibleItems"
         :key="item.name"
         :to="{ name: item.name }"
-        class="group flex items-center gap-3 px-3 py-2.5 rounded-sm text-sm
-               transition-colors duration-150"
-        :class="
-          route.name === item.name
-            ? 'bg-accent text-invert font-medium shadow-sm'
-            : 'text-muted hover:text-text hover:bg-card-hover'
-        "
+        class="flex items-center gap-3 px-3 py-2 rounded-sm text-sm
+               text-muted hover:text-text hover:bg-card-hover transition-colors"
+        :class="{ 'bg-accent-soft text-accent hover:bg-accent-soft': route.name === item.name }"
         @click="emit('close')"
       >
-        <component
-          :is="item.icon"
-          :size="18"
-          :stroke-width="route.name === item.name ? 2.25 : 1.75"
-        />
+        <component :is="item.icon" :size="18" :stroke-width="1.75" />
         <span class="flex-1">{{ item.label }}</span>
         <span
           v-if="item.name === 'tasks' && tasksStore.pendingCount"
-          class="px-1.5 py-0.5 rounded-full text-[10px] font-semibold"
-          :class="
-            route.name === item.name
-              ? 'bg-white/25 text-white'
-              : 'bg-warning/15 text-warning'
-          "
+          class="px-1.5 py-0.5 rounded-full text-[10px] font-medium
+                 bg-warning/15 text-warning"
         >
           {{ tasksStore.pendingCount }}
         </span>

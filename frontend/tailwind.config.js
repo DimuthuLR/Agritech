@@ -7,7 +7,7 @@ export default {
   ],
   theme: {
     extend: {
-            colors: {
+      colors: {
         'bg':          'rgb(var(--bg) / <alpha-value>)',
         'card':        'rgb(var(--card) / <alpha-value>)',
         'card-hover':  'rgb(var(--card-hover) / <alpha-value>)',
@@ -23,6 +23,10 @@ export default {
         'success':     'rgb(var(--success) / <alpha-value>)',
         'warning':     'rgb(var(--warning) / <alpha-value>)',
         'danger':      'rgb(var(--danger) / <alpha-value>)',
+      },
+      backgroundImage: {
+        'app-gradient':
+          'radial-gradient(circle at 0% 0%, rgba(34, 89, 58, 0.30), transparent 55%), radial-gradient(circle at 100% 100%, rgba(66, 133, 173, 0.20), transparent 60%)',
       },
       borderRadius: {
         DEFAULT: 'var(--radius)',
