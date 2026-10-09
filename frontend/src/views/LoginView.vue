@@ -33,7 +33,7 @@ async function submit() {
 
       <div class="flex items-center gap-2 mb-6">
         <img src="/favicon.svg" alt="AgriTech Logo" class="w-8 h-8 rounded-sm" />
-        <h1 class="text-xl font-semibold">AgriTech</h1>
+        <h1 class="text-xl font-semibold">AGRA</h1>
       </div>
 
       <form @submit.prevent="submit" class="space-y-4">
