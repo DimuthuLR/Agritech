@@ -11,6 +11,8 @@ import {
   Wallet,
   MessageCircle,
   Settings,
+  Server,
+  Users as UsersIcon,
   type LucideIcon,
 } from 'lucide-vue-next'
 
@@ -28,7 +30,7 @@ interface NavItem {
   feature?: string
 }
 
-const items: NavItem[] = [
+const tenantItems: NavItem[] = [
   { name: 'dashboard', label: 'Dashboard',  icon: LayoutDashboard },
   { name: 'plots',     label: 'Plots',      icon: Sprout },
   { name: 'tasks',     label: 'Tasks',      icon: CheckSquare },
@@ -38,17 +40,22 @@ const items: NavItem[] = [
   { name: 'admin',     label: 'Users',      icon: Settings,     tenantAdminOnly: true, feature: 'users' },
 ]
 
-const visibleItems = computed(() =>
-  items.filter((i) => {
-    if (i.tenantAdminOnly && auth.user?.tenant_role !== 'tenant_admin') {
-      return false
-    }
-    if (i.feature && !auth.hasFeature(i.feature)) {
-      return false
-    }
+const platformItems: NavItem[] = [
+  { name: 'platform-dashboard', label: 'Platform',   icon: Server },
+  { name: 'platform-sessions',  label: 'Support',    icon: UsersIcon },
+]
+
+const visibleItems = computed(() => {
+  // Platform users see only the platform sidebar.
+  if (auth.isPlatformUser) {
+    return platformItems
+  }
+  return tenantItems.filter((i) => {
+    if (i.tenantAdminOnly && auth.user?.tenant_role !== 'tenant_admin') return false
+    if (i.feature && !auth.hasFeature(i.feature)) return false
     return true
-  }),
-)
+  })
+})
 </script>
 
 <template>

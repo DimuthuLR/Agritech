@@ -480,3 +480,50 @@ def list_support_sessions(
         .all()
     )
     return [SupportSessionRead.model_validate(r) for r in rows]
+
+
+    # ============================================================================
+# Tenant users (helper for the support-session UI)
+# ============================================================================
+
+class TenantUserSummary(BaseModel):
+    id: uuid.UUID
+    email: str
+    full_name: str | None
+    tenant_role: str | None
+    is_active: bool
+    last_login_at: datetime | None
+
+
+@router.get(
+    "/tenants/{tenant_id}/users",
+    response_model=list[TenantUserSummary],
+    dependencies=[Depends(require_platform_role(PlatformRole.SUPPORT_AGENT))],
+)
+def list_tenant_users(
+    tenant_id: uuid.UUID,
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+) -> list[TenantUserSummary]:
+    """
+    List users belonging to a tenant. Used by the support-session UI
+    to pick an impersonation target.
+    """
+    _get_tenant_or_404(db, tenant_id)
+
+    q = db.query(User).filter(User.tenant_id == tenant_id)
+    if not include_inactive:
+        q = q.filter(User.is_active.is_(True))
+    rows = q.order_by(User.email.asc()).limit(500).all()
+
+    return [
+        TenantUserSummary(
+            id=u.id,
+            email=u.email,
+            full_name=u.full_name,
+            tenant_role=u.tenant_role.value if u.tenant_role else None,
+            is_active=u.is_active,
+            last_login_at=getattr(u, "last_login_at", None),
+        )
+        for u in rows
+    ]

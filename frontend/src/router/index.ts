@@ -33,6 +33,14 @@ const routes: RouteRecordRaw[] = [
       { path: 'admin', name: 'admin',
         component: () => import('../views/AdminView.vue'),
         meta: { feature: 'users' } },
+
+      // --- Platform plane (Phase 10.7) ---
+      { path: 'platform', name: 'platform-dashboard',
+        component: () => import('../views/platform/PlatformDashboard.vue'),
+        meta: { platformOnly: true } },
+      { path: 'platform/sessions', name: 'platform-sessions',
+        component: () => import('../views/platform/SupportSessions.vue'),
+        meta: { platformOnly: true } },
     ],
   },
   { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
@@ -46,7 +54,6 @@ const router = createRouter({
 router.beforeEach((to) => {
   const auth = useAuthStore()
 
-  // Public routes — always allowed
   if (to.meta.public) {
     if (auth.isAuthenticated && to.name === 'login') {
       return { name: 'dashboard' }
@@ -54,7 +61,6 @@ router.beforeEach((to) => {
     return true
   }
 
-  // Otherwise require auth
   if (!auth.isAuthenticated) {
     return { name: 'login', query: { redirect: to.fullPath } }
   }
@@ -64,11 +70,10 @@ router.beforeEach((to) => {
     return { name: 'dashboard' }
   }
 
-  // Feature-flagged routes: redirect to dashboard if the tenant
-  // doesn't have this feature enabled. `hasFeature` fails open
-  // pre-load, so this is safe even on the first navigation.
+  // Tenant feature flags — skip when the user has no tenant (platform staff).
+  // Platform users bypass feature checks because feature flags are per-tenant.
   const requiredFeature = to.meta.feature as string | undefined
-  if (requiredFeature && !auth.hasFeature(requiredFeature)) {
+  if (requiredFeature && auth.user?.tenant_id && !auth.hasFeature(requiredFeature)) {
     return { name: 'dashboard' }
   }
 
