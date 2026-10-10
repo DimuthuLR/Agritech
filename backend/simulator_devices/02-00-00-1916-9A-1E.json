@@ -1,0 +1,9 @@
+{
+  "device_id": "5d59ade6-e781-419e-a7ad-299e91eba1cc",
+  "serial": "02:00:00:1916:9A:1E",
+  "hmac_secret": "2609b704ff595067ef4600d60312f61026498d84ce6c6ad295277753ff29aa9f",
+  "hw_version": "simulator-v1.0",
+  "fw_version": "0.1.0",
+  "chip": "simulator",
+  "created_at": "2026-10-10T18:20:19.903492Z"
+}
