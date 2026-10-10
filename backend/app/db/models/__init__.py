@@ -21,6 +21,8 @@ from app.db.models.knowledge_document import KnowledgeDocument
 from app.db.models.support_session import SupportSession
 from app.db.models.chat_session import ChatSession
 
+from app.db.models.device_claim_code import DeviceClaimCode
+
 __all__ = [
     "Tenant", "TenantFeature",
     "User", "TenantRole", "PlatformRole",

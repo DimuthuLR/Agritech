@@ -7,7 +7,7 @@ when was it last seen, what's its physical serial number.
 """
 import uuid
 from datetime import datetime
-from sqlalchemy import String, DateTime, ForeignKey, func, Index
+from sqlalchemy import String, Text, DateTime, ForeignKey, func, Numeric, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -64,5 +64,30 @@ class Device(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
+        # ---- Claimed / hardware info ----
+    claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    hw_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    chip_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    # ---- Latest health snapshot (from heartbeat) ----
+    uptime_sec: Mapped[int | None] = mapped_column(nullable=True)
+    free_heap_kb: Mapped[int | None] = mapped_column(nullable=True)
+    rssi_dbm: Mapped[int | None] = mapped_column(nullable=True)
+    battery_v: Mapped[float | None] = mapped_column(
+        Numeric(5, 2), nullable=True
+    )
+
+    # ---- Last error ----
+    last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_error_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     def __repr__(self) -> str:
         return f"<Device {self.kind} serial={self.serial!r}>"
+
+
+    
