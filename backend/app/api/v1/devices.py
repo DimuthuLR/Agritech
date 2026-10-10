@@ -6,13 +6,18 @@ used for HMAC signing of incoming readings.
 
 Feature flag: 'sensors' gates every endpoint in this file.
 """
-import uuid
+import json
+import logging
 import secrets
+import time
+import uuid
 
+import paho.mqtt.client as mqtt
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import require_tenant_role, require_feature
+from app.core.config import settings
 from app.db.models.device import Device
 from app.db.models.plot import Plot
 from app.db.models.user import User, TenantRole
@@ -23,8 +28,12 @@ from app.schemas.device import (
     DeviceRead,
     DeviceUpdate,
     DeviceSecretResponse,
+    TestCommandRequest,
+    TestCommandResponse,
 )
 
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/devices", tags=["devices"])
 
@@ -62,10 +71,41 @@ def _serialize(device: Device, secret: str | None = None) -> dict:
         "metadata": device.metadata_,
         "last_seen_at": device.last_seen_at,
         "created_at": device.created_at,
+        # Claimed / hardware
+        "claimed_at": device.claimed_at,
+        "hw_version": device.hw_version,
+        "chip_type": device.chip_type,
+        # Health
+        "uptime_sec": device.uptime_sec,
+        "free_heap_kb": device.free_heap_kb,
+        "rssi_dbm": device.rssi_dbm,
+        "battery_v": (
+            float(device.battery_v) if device.battery_v is not None else None
+        ),
+        # Last error
+        "last_error_code": device.last_error_code,
+        "last_error_message": device.last_error_message,
+        "last_error_at": device.last_error_at,
     }
     if secret is not None:
         data["secret_key"] = secret
     return data
+
+
+def _publish_mqtt(topic: str, payload: dict) -> None:
+    """
+    Publish a message to Mosquitto. Uses a short-lived connection
+    (connect, publish, disconnect) — fine for low-volume endpoints.
+    """
+    client = mqtt.Client(
+        client_id=f"api-{secrets.token_hex(4)}",
+        callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+    )
+    try:
+        client.connect(settings.mqtt_host, settings.mqtt_port, keepalive=10)
+        client.publish(topic, json.dumps(payload), qos=1)
+    finally:
+        client.disconnect()
 
 
 # --- Endpoints ----------------------------------------------------------------
@@ -83,11 +123,9 @@ def create_device(
     """
     require_feature(db, user.tenant_id, "sensors")
 
-    # If plot_id provided, verify ownership before accepting.
     if payload.plot_id is not None:
         _verify_plot_ownership(db, payload.plot_id, user.tenant_id)
 
-    # Friendly error for duplicate serials (also enforced by DB unique index).
     existing = db.query(Device).filter(Device.serial == payload.serial).first()
     if existing is not None:
         raise HTTPException(
@@ -95,10 +133,10 @@ def create_device(
             detail=f"Device with serial {payload.serial!r} already exists",
         )
 
-    secret = secrets.token_hex(32)   # 64 hex chars
+    secret = secrets.token_hex(32)
 
     device = Device(
-        tenant_id=user.tenant_id,     # derived from token, not client
+        tenant_id=user.tenant_id,
         plot_id=payload.plot_id,
         kind=payload.kind,
         model=payload.model,
@@ -175,7 +213,6 @@ def update_device(
 
     updates = payload.model_dump(exclude_unset=True)
 
-    # Handle the plot_id reassignment carefully — must verify ownership.
     if "plot_id" in updates and updates["plot_id"] is not None:
         _verify_plot_ownership(db, updates["plot_id"], user.tenant_id)
         device.plot_id = updates.pop("plot_id")
@@ -183,7 +220,6 @@ def update_device(
         device.plot_id = None
         updates.pop("plot_id")
 
-    # metadata_ (Python) ← metadata (API)
     if "metadata" in updates:
         device.metadata_ = updates.pop("metadata")
 
@@ -245,3 +281,61 @@ def rotate_secret(
     db.commit()
 
     return DeviceSecretResponse(id=device.id, secret_key=new_secret)
+
+
+@router.post("/{device_id}/test-command", response_model=TestCommandResponse)
+def test_command(
+    device_id: uuid.UUID,
+    payload: TestCommandRequest,
+    user: User = Depends(require_tenant_role(TenantRole.OPERATOR)),
+    db: Session = Depends(get_db),
+):
+    """
+    Publish a test command to a device's MQTT topic.
+
+    For pilot testing — lets you poke a device from the UI without
+    waiting for the full task-dispatch pipeline. Real commands
+    (from approved tasks) will go through a separate path.
+    """
+    require_feature(db, user.tenant_id, "sensors")
+
+    device = (
+        db.query(Device)
+        .filter(Device.id == device_id, Device.tenant_id == user.tenant_id)
+        .first()
+    )
+    if device is None:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    cmd_id = f"c_{secrets.token_hex(6)}"
+    now = int(time.time())
+    topic = f"agra/devices/{device.id}/command"
+
+    body = {
+        "cmd_id": cmd_id,
+        "action": payload.action,
+        "params": payload.params,
+        "issued_at": now,
+        "expires_at": now + 300,
+    }
+
+    try:
+        _publish_mqtt(topic, body)
+    except Exception as e:
+        log.error(f"[devices] MQTT publish failed for {device.serial}: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"MQTT publish failed: {type(e).__name__}",
+        )
+
+    log.info(
+        f"[devices] TEST_COMMAND device={device.serial} "
+        f"action={payload.action} cmd_id={cmd_id} by={user.email}"
+    )
+
+    return TestCommandResponse(
+        device_id=device.id,
+        cmd_id=cmd_id,
+        action=payload.action,
+        topic=topic,
+    )

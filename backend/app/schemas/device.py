@@ -25,7 +25,7 @@ class DeviceCreate(DeviceBase):
 
 
 class DeviceRead(BaseModel):
-    """Public view. NEVER includes secret_key."""
+    """Public view. NEVER includes secret_key. Includes latest health snapshot."""
     id: uuid.UUID
     tenant_id: uuid.UUID
     plot_id: uuid.UUID | None
@@ -37,6 +37,22 @@ class DeviceRead(BaseModel):
     metadata: dict[str, Any]
     last_seen_at: datetime | None
     created_at: datetime
+
+    # ---- Claimed / hardware info ----
+    claimed_at: datetime | None
+    hw_version: str | None
+    chip_type: str | None
+
+    # ---- Health snapshot ----
+    uptime_sec: int | None
+    free_heap_kb: int | None
+    rssi_dbm: int | None
+    battery_v: float | None
+
+    # ---- Last error ----
+    last_error_code: str | None
+    last_error_message: str | None
+    last_error_at: datetime | None
 
 
 class DeviceCreated(DeviceRead):
@@ -59,3 +75,17 @@ class DeviceSecretResponse(BaseModel):
     """Response for POST /devices/{id}/rotate-secret."""
     id: uuid.UUID
     secret_key: str
+
+
+class TestCommandRequest(BaseModel):
+    """Body for POST /devices/{id}/test-command."""
+    action: str = Field(..., min_length=1, max_length=64)
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class TestCommandResponse(BaseModel):
+    """Acknowledgment that the command was published."""
+    device_id: uuid.UUID
+    cmd_id: str
+    action: str
+    topic: str

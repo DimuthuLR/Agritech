@@ -5,7 +5,7 @@ import { useAuthStore } from '../../stores/auth'
 import { useTasksStore } from '../../stores/tasks'
 import {
   LayoutDashboard, Sprout, CheckSquare, Leaf, Wallet,
-  MessageCircle, Settings, Server, Users as UsersIcon,
+  MessageCircle, Settings, Server, Users as UsersIcon, Cpu,
   type LucideIcon,
 } from 'lucide-vue-next'
 
@@ -26,6 +26,7 @@ interface NavItem {
 const tenantItems: NavItem[] = [
   { name: 'dashboard', label: 'Dashboard',  icon: LayoutDashboard },
   { name: 'plots',     label: 'Plots',      icon: Sprout },
+  { name: 'devices',   label: 'Devices',    icon: Cpu,           feature: 'sensors' },
   { name: 'tasks',     label: 'Tasks',      icon: CheckSquare },
   { name: 'diagnosis', label: 'Diagnosis',  icon: Leaf,          feature: 'diagnosis' },
   { name: 'finance',   label: 'Finance',    icon: Wallet,        feature: 'finance' },
