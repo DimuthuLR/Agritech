@@ -22,24 +22,21 @@ function logout() {
 </script>
 
 <template>
-  <header class="h-20 bg-surface border-b border-surface-border
-                 flex items-center px-6 gap-4">
+  <header class="h-16 border-b border-border bg-surface flex items-center px-6 gap-4
+                 shadow-[0_1px_2px_rgb(0_0_0_/_0.03)]">
     <!-- Hamburger for mobile -->
     <button
-      class="md:hidden text-surface-text-muted hover:text-surface-text"
+      class="md:hidden text-muted hover:text-text"
       @click="emit('toggle-sidebar')"
       aria-label="Toggle menu"
     >
-      <Menu :size="22" :stroke-width="1.75" />
+      <Menu :size="20" :stroke-width="1.75" />
     </button>
 
     <!-- Logo / brand -->
-    <router-link to="/dashboard" class="flex items-center gap-3 font-semibold">
-      <span class="w-10 h-10 rounded-lg bg-white flex items-center justify-center
-                   shadow-sm ring-1 ring-black/5">
-        <img src="/favicon.svg" alt="AgriTech Logo" class="w-8 h-8" />
-      </span>
-      <span class="text-xl tracking-tight">AGRA</span>
+    <router-link to="/dashboard" class="flex items-center gap-2 font-semibold">
+      <img src="/favicon.svg" alt="AgriTech Logo" class="w-6 h-6 rounded-sm" />
+      <span>AGRA</span>
     </router-link>
 
     <div class="flex-1"></div>
@@ -50,11 +47,11 @@ function logout() {
     <!-- User menu -->
     <div class="relative">
       <button class="flex items-center gap-2 text-sm" @click="toggleUserMenu">
-        <span class="w-9 h-9 rounded-full bg-surface-active text-surface-accent
+        <span class="w-8 h-8 rounded-full bg-accent-soft text-accent
                      flex items-center justify-center font-medium">
           {{ auth.user?.email?.[0]?.toUpperCase() || '?' }}
         </span>
-        <span class="hidden md:inline text-surface-text-muted">
+        <span class="hidden md:inline text-muted">
           {{ auth.user?.email }}
         </span>
       </button>
@@ -63,7 +60,8 @@ function logout() {
 
       <div v-if="showUserMenu" class="absolute right-0 top-full mt-2 w-48 card z-50 p-1">
         <button
-          class="w-full text-left px-3 py-2 rounded-sm text-sm hover:bg-card-hover"
+          class="w-full text-left px-3 py-2 rounded-sm text-sm
+                 hover:bg-card-hover"
           @click="logout"
         >
           Log out

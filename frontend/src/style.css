@@ -1,5 +1,4 @@
-/* Dark mode override for the ambient background gradient.
-   Sits outside @layer so it always loads. */
+/* Dark mode override for the ambient gradient */
 [data-theme="dark"] .bg-app-gradient {
   background-image:
     radial-gradient(circle at 0% 0%, rgba(110, 200, 130, 0.30), transparent 60%),
@@ -11,18 +10,14 @@
 @tailwind utilities;
 
 @layer base {
-  html, body, #app {
-    height: 100%;
-  }
+  html, body, #app { height: 100%; }
 
   body {
     @apply bg-bg text-text font-sans antialiased;
     transition: background-color 0.2s ease, color 0.2s ease;
   }
 
-  h1, h2, h3 {
-    letter-spacing: -0.02em;
-  }
+  h1, h2, h3 { letter-spacing: -0.02em; }
 
   ::-webkit-scrollbar        { width: 10px; height: 10px; }
   ::-webkit-scrollbar-track  { background: transparent; }
@@ -38,18 +33,9 @@
       0 8px 24px -12px rgb(var(--shadow-color) / var(--shadow-opacity));
   }
 
-  .card-solid-accent {
-    @apply rounded p-6 text-white;
-    background-color: rgb(var(--accent));
-  }
-  .card-solid-water {
-    @apply rounded p-6 text-white;
-    background-color: rgb(var(--water));
-  }
-  .card-solid-warning {
-    @apply rounded p-6 text-white;
-    background-color: rgb(var(--warning));
-  }
+  .card-solid-accent  { @apply rounded p-6 text-white; background-color: rgb(var(--accent)); }
+  .card-solid-water   { @apply rounded p-6 text-white; background-color: rgb(var(--water)); }
+  .card-solid-warning { @apply rounded p-6 text-white; background-color: rgb(var(--warning)); }
 
   .card-tint-accent  { @apply card; }
   .card-tint-water   { @apply card; }
@@ -64,69 +50,77 @@
   .stat-icon-warning { @apply stat-icon; color: rgb(var(--warning)); }
   .stat-icon-danger  { @apply stat-icon; color: rgb(var(--danger)); }
 
-  .nav-item {
-    @apply flex items-center gap-3 px-3 py-2.5 rounded-sm text-sm
-           text-muted hover:text-text transition-colors;
-  }
-  .nav-item:hover {
-    background-color: rgb(var(--card-hover));
-  }
-  .nav-item-active {
-    @apply text-accent font-medium;
-    background-color: rgb(var(--accent-soft));
-  }
-
   .btn {
     @apply inline-flex items-center justify-center gap-2
            px-4 py-2.5 rounded-sm text-sm font-medium
            transition-all duration-150
            disabled:opacity-50 disabled:cursor-not-allowed;
   }
-  .btn-primary {
-    @apply btn bg-accent text-invert;
-  }
-  .btn-primary:hover {
-    filter: brightness(1.08);
-  }
-  .btn-ghost {
-    @apply btn bg-transparent border border-border
-           text-text hover:bg-card-hover;
-  }
-  .btn-danger {
-    @apply btn bg-danger text-invert;
-  }
-  .btn-danger:hover {
-    filter: brightness(1.08);
-  }
+  .btn-primary { @apply btn bg-accent text-invert; }
+  .btn-primary:hover { filter: brightness(1.08); }
+  .btn-ghost { @apply btn bg-transparent border border-border text-text hover:bg-card-hover; }
+  .btn-danger { @apply btn bg-danger text-invert; }
+  .btn-danger:hover { filter: brightness(1.08); }
 
   .input {
     @apply w-full px-3.5 py-2.5 rounded-sm
            bg-card border border-border
            text-text placeholder:text-muted
-           focus:outline-none focus:border-accent
-           transition-colors;
+           focus:outline-none focus:border-accent transition-colors;
   }
 
   .pill {
-    @apply inline-flex items-center gap-1.5
-           px-2.5 py-1 rounded-full text-xs font-medium;
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium;
   }
   .pill-success { @apply pill bg-success/10 text-success; }
   .pill-warning { @apply pill bg-warning/10 text-warning; }
   .pill-danger  { @apply pill bg-danger/10  text-danger; }
   .pill-muted   { @apply pill bg-card-hover text-muted; }
 
-  .hover-lift {
-    @apply transition-all duration-200;
-  }
-  .hover-lift:hover {
-    transform: translateY(-2px);
-  }
+  .hover-lift { @apply transition-all duration-200; }
+  .hover-lift:hover { transform: translateY(-2px); }
 
-  .page-title {
-    @apply text-3xl font-bold tracking-tight;
+  .page-title { @apply text-3xl font-bold tracking-tight; }
+  .page-subtitle { @apply text-sm text-muted mt-1.5; }
+}
+
+
+/* ---- Page transition: quick fade only ---- */
+/* The outer wrapper fades; the inner sections stagger in. */
+.page-enter-active,
+.page-leave-active {
+  transition: opacity 0.2s ease;
+}
+.page-enter-from,
+.page-leave-to {
+  opacity: 0;
+}
+
+/* ---- Staggered entrance for page sections ---- */
+@keyframes stagger-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
   }
-  .page-subtitle {
-    @apply text-sm text-muted mt-1.5;
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
+
+/* Each direct child of the page root animates in.
+   `both` keeps the from-state before the animation starts. */
+.stagger-page > * > * {
+  animation: stagger-in 0.5s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+/* Incremental delays — 50ms between each sibling */
+.stagger-page > * > *:nth-child(1)  { animation-delay: 0.00s; }
+.stagger-page > * > *:nth-child(2)  { animation-delay: 0.05s; }
+.stagger-page > * > *:nth-child(3)  { animation-delay: 0.10s; }
+.stagger-page > * > *:nth-child(4)  { animation-delay: 0.15s; }
+.stagger-page > * > *:nth-child(5)  { animation-delay: 0.20s; }
+.stagger-page > * > *:nth-child(6)  { animation-delay: 0.25s; }
+.stagger-page > * > *:nth-child(7)  { animation-delay: 0.30s; }
+.stagger-page > * > *:nth-child(8)  { animation-delay: 0.35s; }
+.stagger-page > * > *:nth-child(n+9) { animation-delay: 0.40s; }

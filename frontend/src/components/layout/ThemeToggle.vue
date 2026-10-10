@@ -12,7 +12,7 @@ const options: { mode: ThemeMode; label: string; icon: any }[] = [
 </script>
 
 <template>
-  <div class="flex items-center rounded-sm border border-border overflow-hidden">
+  <div class="flex items-center rounded-sm border border-surface-border overflow-hidden">
     <button
       v-for="opt in options"
       :key="opt.mode"
@@ -21,8 +21,8 @@ const options: { mode: ThemeMode; label: string; icon: any }[] = [
       :class="[
         'px-2 py-1.5 transition-colors',
         theme.mode.value === opt.mode
-          ? 'bg-accent text-invert'
-          : 'text-muted hover:text-text hover:bg-card-hover',
+          ? 'bg-surface-active text-surface-accent'
+          : 'text-surface-text-muted hover:text-surface-text hover:bg-surface-hover',
       ]"
       @click="theme.setMode(opt.mode)"
     >

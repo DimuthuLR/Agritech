@@ -1,12 +1,16 @@
 /* ==========================================================================
-   Theme tokens.
+   Theme tokens - all colors in one place.
+   To rebrand the platform, edit ONLY this file.
+   Values are "R G B" triplets so Tailwind can do opacity modifiers.
    ========================================================================== */
 
 :root {
-  /* ---- Page (light) ---- */
-  --bg:          246 243 237;
+  /* ---- Backgrounds & surfaces (light) ---- */
+  --bg:          246 243 237;   /* warm cream */
   --card:        255 255 255;
   --card-hover:  244 241 234;
+  --surface:     224 219 209;
+  --surface-2:   255 255 255;   /* topbar */
   --border:      234 229 218;
   --border-soft: 240 236 228;
 
@@ -17,20 +21,15 @@
 
   /* ---- Accent (light) ---- */
   --accent:        34  89  58;
+  --accent-glow:   74 143  96;   /* for gradients */
   --accent-soft:  232 242 235;
   --water:         66 133 173;
+  --water-glow:   118 178 209;
+
+  /* ---- Status (light) ---- */
   --success:       61 122  78;
   --warning:      217 130  43;
   --danger:       190  84  80;
-
-  /* ---- Dark chrome (sidebar + topbar) — same in both themes ---- */
-  --surface:            246 243 237;
-  --surface-hover:      232 227 216;
-  --surface-active:     224 219 208;
-  --surface-border:     234 229 218;
-  --surface-text:        22  23  24;
-  --surface-text-muted: 122 115 105;
-  --surface-accent:      34  89  58;
 
   /* ---- Shape ---- */
   --radius:     20px;
@@ -43,10 +42,12 @@
 }
 
 [data-theme="dark"] {
-  /* ---- Page (dark) ---- */
-  --bg:           11  13  16;
+  /* ---- Backgrounds & surfaces (dark) ---- */
+  --bg:           11  13  16;   /* deep charcoal-blue */
   --card:         22  26  31;
   --card-hover:   30  34  40;
+  --surface:      18  22  27;
+  --surface-2:    18  22  27;   /* topbar */
   --border:       38  42  48;
   --border-soft:  30  34  39;
 
@@ -56,21 +57,17 @@
   --text-invert:  11  13  15;
 
   /* ---- Accent (dark) ---- */
-  --accent:      143 197 160;
+  --accent:      110 200 130;
+  --accent-glow: 143 220 165;
   --accent-soft:  30  42  34;
   --water:       124 179 192;
+  --water-glow:  160 210 220;
+
+  /* ---- Status (dark) ---- */
   --success:     143 197 160;
   --warning:     229 168  92;
   --danger:      224 122 117;
 
-  /* ---- Dark chrome (same look, slightly deeper) ---- */
-  --surface:            20  23  27;
-  --surface-hover:      32  36  41;
-  --surface-active:     42  47  53;
-  --surface-border:     30  34  39;
-  --surface-text:       235 235 230;
-  --surface-text-muted: 150 150 145;
-  --surface-accent:     143 197 160;
-
-  --shadow-opacity: 0.35;
+  /* ---- Shadows (dark) - deeper, more visible ---- */
+  --shadow-opacity:  0.35;
 }

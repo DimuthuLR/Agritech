@@ -4,8 +4,15 @@ import { useRoute } from 'vue-router'
 import { useAuthStore } from '../../stores/auth'
 import { useTasksStore } from '../../stores/tasks'
 import {
-  LayoutDashboard, Sprout, CheckSquare, Leaf, Wallet,
-  MessageCircle, Settings, Server, Users as UsersIcon,
+  LayoutDashboard,
+  Sprout,
+  CheckSquare,
+  Leaf,
+  Wallet,
+  MessageCircle,
+  Settings,
+  Server,
+  Users as UsersIcon,
   type LucideIcon,
 } from 'lucide-vue-next'
 
@@ -39,7 +46,9 @@ const platformItems: NavItem[] = [
 ]
 
 const visibleItems = computed(() => {
-  if (auth.isPlatformUser) return platformItems
+  if (auth.isPlatformUser) {
+    return platformItems
+  }
   return tenantItems.filter((i) => {
     if (i.tenantAdminOnly && auth.user?.tenant_role !== 'tenant_admin') return false
     if (i.feature && !auth.hasFeature(i.feature)) return false
@@ -59,7 +68,8 @@ const visibleItems = computed(() => {
     :class="[
       'fixed md:static inset-y-0 left-0 z-40 md:z-auto',
       'w-64 flex flex-col py-5 transition-transform duration-200',
-      'bg-surface border-r border-surface-border',
+      'bg-surface border-r border-border',
+      'shadow-[1px_0_2px_rgb(0_0_0_/_0.02)]',
       open ? 'translate-x-0' : '-translate-x-full md:translate-x-0',
     ]"
   >
@@ -72,8 +82,8 @@ const visibleItems = computed(() => {
                transition-colors duration-150"
         :class="
           route.name === item.name
-            ? 'bg-surface-active text-surface-text font-medium'
-            : 'text-surface-text-muted hover:text-surface-text hover:bg-surface-hover'
+            ? 'bg-accent text-invert font-medium shadow-sm'
+            : 'text-muted hover:text-text hover:bg-card-hover'
         "
         @click="emit('close')"
       >
@@ -85,8 +95,12 @@ const visibleItems = computed(() => {
         <span class="flex-1">{{ item.label }}</span>
         <span
           v-if="item.name === 'tasks' && tasksStore.pendingCount"
-          class="px-1.5 py-0.5 rounded-full text-[10px] font-semibold
-                 bg-surface-accent/20 text-surface-accent"
+          class="px-1.5 py-0.5 rounded-full text-[10px] font-semibold"
+          :class="
+            route.name === item.name
+              ? 'bg-white/25 text-white'
+              : 'bg-warning/15 text-warning'
+          "
         >
           {{ tasksStore.pendingCount }}
         </span>
