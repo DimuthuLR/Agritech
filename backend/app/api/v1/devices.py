@@ -111,19 +111,24 @@ def _serialize(device: Device, secret: str | None = None) -> dict:
 
 def _publish_mqtt(topic: str, payload: dict) -> None:
     """
-    Publish a message to Mosquitto. Uses a short-lived connection
-    (connect, publish, disconnect) — fine for low-volume endpoints.
+    Publish a message to Mosquitto and wait for it to be acknowledged.
+
+    paho's publish() is asynchronous — it queues and returns. If we call
+    disconnect() immediately, the message never leaves. We need
+    loop_start() + wait_for_publish() to actually flush it.
     """
     client = mqtt.Client(
         client_id=f"api-{secrets.token_hex(4)}",
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
     )
+    client.connect(settings.mqtt_host, settings.mqtt_port, keepalive=10)
+    client.loop_start()
     try:
-        client.connect(settings.mqtt_host, settings.mqtt_port, keepalive=10)
-        client.publish(topic, json.dumps(payload), qos=1)
+        info = client.publish(topic, json.dumps(payload), qos=1)
+        info.wait_for_publish(timeout=5)
     finally:
+        client.loop_stop()
         client.disconnect()
-
 
 # --- Endpoints ----------------------------------------------------------------
 

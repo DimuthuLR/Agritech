@@ -51,16 +51,13 @@ def main() -> None:
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
     )
     client.connect(MQTT_HOST, MQTT_PORT, keepalive=30)
+    client.loop_start()
 
     topic = f"agra/devices/{args.device_id}/command"
-    client.publish(topic, payload, qos=1)
+    info = client.publish(topic, payload, qos=1)
+    info.wait_for_publish(timeout=5)
+
+    client.loop_stop()
     client.disconnect()
-
-    print(f"Published to {topic}")
-    print(f"  cmd_id: {cmd_id}")
-    print(f"  action: {args.action}")
-    print(f"  params: {params}")
-
-
 if __name__ == "__main__":
     main()
