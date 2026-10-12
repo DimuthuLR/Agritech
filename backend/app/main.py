@@ -25,8 +25,8 @@ from app.api.v1.field_events import router as field_events_router
 from app.api.v1.chat import router as chat_router
 from app.api.v1.users import router as users_router
 from app.api.v1.platform import router as platform_router
-
 from app.api.v1.iot import router as iot_router
+from app.services.iot_ack_subscriber import subscriber as iot_ack_subscriber
 
 
 @asynccontextmanager
@@ -39,7 +39,15 @@ async def lifespan(app: FastAPI):
         print("[startup] database connection OK")
     except Exception as e:
         print(f"[startup] WARNING: database not reachable: {e}")
+
+    try:
+        iot_ack_subscriber.start()
+    except Exception as e:
+        print(f"[startup] WARNING: iot ack subscriber failed to start: {e}")
+
     yield
+
+    iot_ack_subscriber.stop()
     print("[shutdown] bye")
 
 
@@ -49,8 +57,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# In dev, accept any localhost port (Vite may serve on 5173, 5174, etc.)
-# In prod, this list shrinks to the real domain(s).
 _dev_origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",

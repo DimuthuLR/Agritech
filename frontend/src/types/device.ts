@@ -11,18 +11,15 @@ export interface Device {
   last_seen_at: string | null
   created_at: string
 
-  // Claimed / hardware
   claimed_at: string | null
   hw_version: string | null
   chip_type: string | null
 
-  // Health
   uptime_sec: number | null
   free_heap_kb: number | null
   rssi_dbm: number | null
   battery_v: number | null
 
-  // Last error
   last_error_code: string | null
   last_error_message: string | null
   last_error_at: string | null
@@ -33,4 +30,16 @@ export interface TestCommandResponse {
   cmd_id: string
   action: string
   topic: string
+}
+
+export interface DeviceEvent {
+  id: string
+  event_type: string
+  cmd_id: string | null
+  action: string | null
+  status: string | null
+  error: string | null
+  duration_ms: number | null
+  occurred_at: string
+  metadata: Record<string, unknown>
 }

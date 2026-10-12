@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { devicesApi } from '../api/devices'
-import type { Device } from '../types/device'
+import type { Device, DeviceEvent } from '../types/device'
 import {
   Loader2, Cpu, Wifi, WifiOff, Battery, Activity,
-  Play, Search, X, AlertCircle, Signal,
+  Play, Search, X, AlertCircle, CheckCircle, Signal,
+  ChevronDown, ChevronRight,
 } from 'lucide-vue-next'
 
 const devices = ref<Device[]>([])
@@ -21,7 +22,11 @@ const actionParams = ref<string>('{}')
 const sending = ref(false)
 const sendResult = ref<string | null>(null)
 
-const ONLINE_THRESHOLD_SEC = 5 * 60  // 5 minutes
+const expandedDeviceId = ref<string | null>(null)
+const deviceEvents = ref<Record<string, DeviceEvent[]>>({})
+const loadingEvents = ref<string | null>(null)
+
+const ONLINE_THRESHOLD_SEC = 5 * 60
 
 function isOnline(d: Device): boolean {
   if (!d.last_seen_at) return false
@@ -52,7 +57,6 @@ function fmtUptime(sec: number | null): string {
   return `${m}m`
 }
 
-
 function statusLabel(d: Device): string {
   if (!d.is_active) return 'Inactive'
   return isOnline(d) ? 'Online' : 'Offline'
@@ -61,6 +65,17 @@ function statusLabel(d: Device): string {
 function statusClass(d: Device): string {
   if (!d.is_active) return 'text-muted'
   return isOnline(d) ? 'text-success' : 'text-danger'
+}
+
+function eventTone(e: DeviceEvent): string {
+  if (e.event_type === 'error') return 'text-danger'
+  if (e.status === 'ok') return 'text-success'
+  if (e.status === 'failed' || e.status === 'rejected') return 'text-danger'
+  return 'text-muted'
+}
+
+function eventIcon(e: DeviceEvent): any {
+  return e.event_type === 'error' ? AlertCircle : CheckCircle
 }
 
 const filtered = computed(() => {
@@ -131,9 +146,24 @@ async function sendCommand() {
   }
 }
 
+async function toggleEvents(d: Device) {
+  if (expandedDeviceId.value === d.id) {
+    expandedDeviceId.value = null
+    return
+  }
+  expandedDeviceId.value = d.id
+  loadingEvents.value = d.id
+  try {
+    deviceEvents.value[d.id] = await devicesApi.events(d.id, 15)
+  } catch {
+    deviceEvents.value[d.id] = []
+  } finally {
+    loadingEvents.value = null
+  }
+}
+
 onMounted(load)
 
-// Refresh every 15s so uptime/last-seen stay fresh
 setInterval(load, 15000)
 </script>
 
@@ -153,7 +183,6 @@ setInterval(load, 15000)
       </button>
     </div>
 
-    <!-- Filters -->
     <div class="flex flex-wrap gap-3">
       <div class="relative flex-1 min-w-[200px]">
         <Search :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
@@ -177,7 +206,6 @@ setInterval(load, 15000)
       </select>
     </div>
 
-    <!-- Loading / error / empty -->
     <div v-if="loading && devices.length === 0"
          class="text-muted flex items-center gap-2">
       <Loader2 :size="16" class="animate-spin" /> Loading devices…
@@ -195,7 +223,6 @@ setInterval(load, 15000)
       </p>
     </div>
 
-    <!-- Device grid -->
     <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <div v-for="d in filtered" :key="d.id" class="card">
         <div class="flex items-start justify-between gap-3 mb-4">
@@ -249,16 +276,78 @@ setInterval(load, 15000)
           </div>
         </div>
 
-        <div class="flex items-center justify-between mt-3 gap-3">
+        <div class="flex items-center justify-between mt-3 gap-2">
           <div class="text-xs text-muted">
             Last seen: {{ relativeTime(d.last_seen_at) }}
           </div>
-          <button
-            class="btn-ghost text-xs py-1 px-3"
-            @click="openCommand(d)"
+          <div class="flex items-center gap-2">
+            <button
+              class="btn-ghost text-xs py-1 px-3"
+              @click="toggleEvents(d)"
+            >
+              <component
+                :is="expandedDeviceId === d.id ? ChevronDown : ChevronRight"
+                :size="11"
+              />
+              Activity
+            </button>
+            <button
+              class="btn-ghost text-xs py-1 px-3"
+              @click="openCommand(d)"
+            >
+              <Play :size="11" /> Test command
+            </button>
+          </div>
+        </div>
+
+        <div
+          v-if="expandedDeviceId === d.id"
+          class="mt-3 pt-3 border-t border-border space-y-2"
+        >
+          <div
+            v-if="loadingEvents === d.id"
+            class="text-xs text-muted flex items-center gap-1.5"
           >
-            <Play :size="11" /> Test command
-          </button>
+            <Loader2 :size="11" class="animate-spin" /> Loading…
+          </div>
+          <div
+            v-else-if="!deviceEvents[d.id] || deviceEvents[d.id].length === 0"
+            class="text-xs text-muted"
+          >
+            No activity yet.
+          </div>
+          <template v-else>
+            <div
+              v-for="e in deviceEvents[d.id]"
+              :key="e.id"
+              class="flex items-start gap-2 text-xs"
+            >
+              <component
+                :is="eventIcon(e)"
+                :size="12"
+                :class="['shrink-0 mt-0.5', eventTone(e)]"
+              />
+              <div class="flex-1 min-w-0">
+                <div class="font-mono truncate">
+                  <span v-if="e.event_type === 'ack'">
+                    ack {{ e.cmd_id }} → {{ e.status }}
+                    <span v-if="e.duration_ms" class="text-muted">
+                      ({{ e.duration_ms }}ms)
+                    </span>
+                  </span>
+                  <span v-else-if="e.event_type === 'error'">
+                    {{ e.action }}: {{ e.error }}
+                  </span>
+                  <span v-else>
+                    {{ e.event_type }} {{ e.action || '' }}
+                  </span>
+                </div>
+              </div>
+              <div class="text-[10px] text-muted whitespace-nowrap">
+                {{ relativeTime(e.occurred_at) }}
+              </div>
+            </div>
+          </template>
         </div>
 
         <div
@@ -271,7 +360,6 @@ setInterval(load, 15000)
       </div>
     </div>
 
-    <!-- Command modal -->
     <div
       v-if="showModal && activeDevice"
       class="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"

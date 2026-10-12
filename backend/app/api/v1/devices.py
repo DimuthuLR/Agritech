@@ -11,14 +11,18 @@ import logging
 import secrets
 import time
 import uuid
+from datetime import datetime
 
 import paho.mqtt.client as mqtt
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.api.deps import require_tenant_role, require_feature
 from app.core.config import settings
 from app.db.models.device import Device
+from app.db.models.device_event import DeviceEvent
 from app.db.models.plot import Plot
 from app.db.models.user import User, TenantRole
 from app.db.session import get_db
@@ -33,10 +37,26 @@ from app.schemas.device import (
 )
 
 
+
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/devices", tags=["devices"])
 
+
+# --- Schemas -----------------------------------------------------------------
+
+class DeviceEventRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+    id: uuid.UUID
+    event_type: str
+    cmd_id: str | None
+    action: str | None
+    status: str | None
+    error: str | None
+    duration_ms: int | None
+    occurred_at: datetime
+    metadata: dict = Field(default_factory=dict, validation_alias="metadata_")
 
 # --- Helpers ------------------------------------------------------------------
 
@@ -71,18 +91,15 @@ def _serialize(device: Device, secret: str | None = None) -> dict:
         "metadata": device.metadata_,
         "last_seen_at": device.last_seen_at,
         "created_at": device.created_at,
-        # Claimed / hardware
         "claimed_at": device.claimed_at,
         "hw_version": device.hw_version,
         "chip_type": device.chip_type,
-        # Health
         "uptime_sec": device.uptime_sec,
         "free_heap_kb": device.free_heap_kb,
         "rssi_dbm": device.rssi_dbm,
         "battery_v": (
             float(device.battery_v) if device.battery_v is not None else None
         ),
-        # Last error
         "last_error_code": device.last_error_code,
         "last_error_message": device.last_error_message,
         "last_error_at": device.last_error_at,
@@ -294,8 +311,7 @@ def test_command(
     Publish a test command to a device's MQTT topic.
 
     For pilot testing — lets you poke a device from the UI without
-    waiting for the full task-dispatch pipeline. Real commands
-    (from approved tasks) will go through a separate path.
+    waiting for the full task-dispatch pipeline.
     """
     require_feature(db, user.tenant_id, "sensors")
 
@@ -339,3 +355,36 @@ def test_command(
         action=payload.action,
         topic=topic,
     )
+
+
+@router.get("/{device_id}/events", response_model=list[DeviceEventRead])
+def list_device_events(
+    device_id: uuid.UUID,
+    limit: int = 50,
+    event_type: str | None = None,
+    user: User = Depends(require_tenant_role(TenantRole.VIEWER)),
+    db: Session = Depends(get_db),
+):
+    """
+    Recent activity for a device (acks, errors, etc.), newest first.
+    """
+    require_feature(db, user.tenant_id, "sensors")
+
+    device = (
+        db.query(Device)
+        .filter(Device.id == device_id, Device.tenant_id == user.tenant_id)
+        .first()
+    )
+    if device is None:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    q = db.query(DeviceEvent).filter(DeviceEvent.device_id == device_id)
+    if event_type is not None:
+        q = q.filter(DeviceEvent.event_type == event_type)
+
+    rows = (
+        q.order_by(DeviceEvent.occurred_at.desc())
+        .limit(min(limit, 200))
+        .all()
+    )
+    return rows

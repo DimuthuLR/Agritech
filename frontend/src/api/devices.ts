@@ -1,5 +1,5 @@
 import { api } from './client'
-import type { Device, TestCommandResponse } from '../types/device'
+import type { Device, DeviceEvent, TestCommandResponse } from '../types/device'
 
 export const devicesApi = {
   async list(params?: { plot_id?: string; kind?: string }): Promise<Device[]> {
@@ -20,6 +20,14 @@ export const devicesApi = {
     const { data } = await api.post<TestCommandResponse>(
       `/devices/${id}/test-command`,
       { action, params },
+    )
+    return data
+  },
+
+  async events(id: string, limit = 20): Promise<DeviceEvent[]> {
+    const { data } = await api.get<DeviceEvent[]>(
+      `/devices/${id}/events`,
+      { params: { limit } },
     )
     return data
   },

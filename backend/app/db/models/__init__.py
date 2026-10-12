@@ -22,6 +22,7 @@ from app.db.models.support_session import SupportSession
 from app.db.models.chat_session import ChatSession
 
 from app.db.models.device_claim_code import DeviceClaimCode
+from app.db.models.device_event import DeviceEvent
 
 __all__ = [
     "Tenant", "TenantFeature",
