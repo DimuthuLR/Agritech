@@ -1,10 +1,5 @@
 """
 Device endpoints — tenant-scoped.
-
-Devices are physical sensors / actuators / gateways. Each has a secret_key
-used for HMAC signing of incoming readings.
-
-Feature flag: 'sensors' gates every endpoint in this file.
 """
 import json
 import logging
@@ -13,14 +8,11 @@ import time
 import uuid
 from datetime import datetime
 
-import paho.mqtt.client as mqtt
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict
-from sqlalchemy.orm import Session
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.orm import Session
 
 from app.api.deps import require_tenant_role, require_feature
-from app.core.config import settings
 from app.db.models.device import Device
 from app.db.models.device_event import DeviceEvent
 from app.db.models.plot import Plot
@@ -36,7 +28,8 @@ from app.schemas.device import (
     TestCommandResponse,
 )
 
-
+# Import the queue from iot.py
+from app.api.v1.iot import COMMAND_QUEUES
 
 log = logging.getLogger(__name__)
 
@@ -58,11 +51,10 @@ class DeviceEventRead(BaseModel):
     occurred_at: datetime
     metadata: dict = Field(default_factory=dict, validation_alias="metadata_")
 
+
 # --- Helpers ------------------------------------------------------------------
 
-
 def _verify_plot_ownership(db: Session, plot_id: uuid.UUID, tenant_id: uuid.UUID) -> Plot:
-    """Return the plot if it exists and belongs to the caller's tenant, else 404."""
     plot = (
         db.query(Plot)
         .filter(Plot.id == plot_id, Plot.tenant_id == tenant_id)
@@ -74,11 +66,6 @@ def _verify_plot_ownership(db: Session, plot_id: uuid.UUID, tenant_id: uuid.UUID
 
 
 def _serialize(device: Device, secret: str | None = None) -> dict:
-    """
-    Convert ORM Device → dict for Pydantic response.
-    `metadata_` (Python) maps to `metadata` (API/JSON).
-    Pass `secret` only on create/rotate responses.
-    """
     data = {
         "id": device.id,
         "tenant_id": device.tenant_id,
@@ -109,29 +96,7 @@ def _serialize(device: Device, secret: str | None = None) -> dict:
     return data
 
 
-def _publish_mqtt(topic: str, payload: dict) -> None:
-    """
-    Publish a message to Mosquitto and wait for it to be acknowledged.
-
-    paho's publish() is asynchronous — it queues and returns. If we call
-    disconnect() immediately, the message never leaves. We need
-    loop_start() + wait_for_publish() to actually flush it.
-    """
-    client = mqtt.Client(
-        client_id=f"api-{secrets.token_hex(4)}",
-        callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-    )
-    client.connect(settings.mqtt_host, settings.mqtt_port, keepalive=10)
-    client.loop_start()
-    try:
-        info = client.publish(topic, json.dumps(payload), qos=1)
-        info.wait_for_publish(timeout=5)
-    finally:
-        client.loop_stop()
-        client.disconnect()
-
 # --- Endpoints ----------------------------------------------------------------
-
 
 @router.post("", response_model=DeviceCreated, status_code=status.HTTP_201_CREATED)
 def create_device(
@@ -139,10 +104,6 @@ def create_device(
     user: User = Depends(require_tenant_role(TenantRole.OPERATOR)),
     db: Session = Depends(get_db),
 ):
-    """
-    Register a new device. The server generates a secret_key and returns it
-    ONCE in this response. Save it — the API will never show it again.
-    """
     require_feature(db, user.tenant_id, "sensors")
 
     if payload.plot_id is not None:
@@ -184,7 +145,6 @@ def list_devices(
     skip: int = 0,
     limit: int = 100,
 ):
-    """List devices for the caller's tenant, with optional filters."""
     require_feature(db, user.tenant_id, "sensors")
 
     q = db.query(Device).filter(Device.tenant_id == user.tenant_id)
@@ -259,10 +219,6 @@ def delete_device(
     user: User = Depends(require_tenant_role(TenantRole.TENANT_ADMIN)),
     db: Session = Depends(get_db),
 ):
-    """
-    Hard-delete a device. Cascades to its sensor_readings.
-    If you want to preserve readings, PATCH is_active=false instead.
-    """
     require_feature(db, user.tenant_id, "sensors")
 
     device = (
@@ -284,10 +240,6 @@ def rotate_secret(
     user: User = Depends(require_tenant_role(TenantRole.TENANT_ADMIN)),
     db: Session = Depends(get_db),
 ):
-    """
-    Generate a new secret_key for a device. The old secret is invalidated
-    immediately. Returns the new secret once — save it.
-    """
     require_feature(db, user.tenant_id, "sensors")
 
     device = (
@@ -313,10 +265,8 @@ def test_command(
     db: Session = Depends(get_db),
 ):
     """
-    Publish a test command to a device's MQTT topic.
-
-    For pilot testing — lets you poke a device from the UI without
-    waiting for the full task-dispatch pipeline.
+    Queue a test command for a device.
+    The S3 Hub will pick this up via HTTP Long Polling.
     """
     require_feature(db, user.tenant_id, "sensors")
 
@@ -330,9 +280,9 @@ def test_command(
 
     cmd_id = f"c_{secrets.token_hex(6)}"
     now = int(time.time())
-    topic = f"agra/devices/{device.id}/command"
-
-    body = {
+    
+    # Construct the command payload
+    command_body = {
         "cmd_id": cmd_id,
         "action": payload.action,
         "params": payload.params,
@@ -340,25 +290,24 @@ def test_command(
         "expires_at": now + 300,
     }
 
-    try:
-        _publish_mqtt(topic, body)
-    except Exception as e:
-        log.error(f"[devices] MQTT publish failed for {device.serial}: {e}")
-        raise HTTPException(
-            status_code=502,
-            detail=f"MQTT publish failed: {type(e).__name__}",
-        )
+    # Add to the in-memory queue for the Hub to poll
+    str_device_id = str(device_id)
+    if str_device_id not in COMMAND_QUEUES:
+        COMMAND_QUEUES[str_device_id] = []
+    
+    COMMAND_QUEUES[str_device_id].append(command_body)
 
     log.info(
-        f"[devices] TEST_COMMAND device={device.serial} "
+        f"[devices] TEST_COMMAND queued device={device.serial} "
         f"action={payload.action} cmd_id={cmd_id} by={user.email}"
     )
 
+    # Return a response that mimics the old MQTT one
     return TestCommandResponse(
         device_id=device.id,
         cmd_id=cmd_id,
         action=payload.action,
-        topic=topic,
+        topic=f"http://poll/command/{device.id}",
     )
 
 
@@ -370,9 +319,6 @@ def list_device_events(
     user: User = Depends(require_tenant_role(TenantRole.VIEWER)),
     db: Session = Depends(get_db),
 ):
-    """
-    Recent activity for a device (acks, errors, etc.), newest first.
-    """
     require_feature(db, user.tenant_id, "sensors")
 
     device = (
