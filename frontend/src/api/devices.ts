@@ -5,6 +5,8 @@ export const devicesApi = {
   async list(params?: { plot_id?: string; kind?: string }): Promise<Device[]> {
     const { data } = await api.get<Device[]>('/devices', { params })
     return data
+    
+    
   },
 
   async get(id: string): Promise<Device> {
@@ -30,5 +32,10 @@ export const devicesApi = {
       { params: { limit } },
     )
     return data
+  },
+
+  async update(id: string, data: { plot_id?: string | null }): Promise<Device> {
+    const res = await api.patch<Device>(`/devices/${id}`, data)
+    return res.data
   },
 }

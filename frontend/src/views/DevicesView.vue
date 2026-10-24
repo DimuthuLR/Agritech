@@ -2,19 +2,20 @@
 import { ref, computed, onMounted } from 'vue'
 import { devicesApi } from '../api/devices'
 import type { Device, DeviceEvent } from '../types/device'
+import { usePlotsStore } from '../stores/plots'
 import {
   Loader2, Cpu, Wifi, WifiOff, Battery, Activity,
-  Play, Search, X, AlertCircle, CheckCircle, Signal,
-  ChevronDown, ChevronRight,
+  Play, Search, X, AlertCircle, CheckCircle,
+  Droplets, Thermometer, Server, Power, PenBox
 } from 'lucide-vue-next'
 
 const devices = ref<Device[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
 const search = ref('')
-const kindFilter = ref<string>('')
 const statusFilter = ref<string>('')
 
+// Modals
 const showModal = ref(false)
 const activeDevice = ref<Device | null>(null)
 const actionChoice = ref('irrigation.start')
@@ -22,12 +23,22 @@ const actionParams = ref<string>('{}')
 const sending = ref(false)
 const sendResult = ref<string | null>(null)
 
+const showAssignModal = ref(false)
+const assigningDevice = ref<Device | null>(null)
+const selectedPlotId = ref<string>('')
+const assigning = ref(false)
+
+// Events
 const expandedDeviceId = ref<string | null>(null)
 const deviceEvents = ref<Record<string, DeviceEvent[]>>({})
 const loadingEvents = ref<string | null>(null)
 
+// Plots
+const plotsStore = usePlotsStore()
+
 const ONLINE_THRESHOLD_SEC = 5 * 60
 
+// Helpers
 function isOnline(d: Device): boolean {
   if (!d.last_seen_at) return false
   const seen = new Date(d.last_seen_at).getTime()
@@ -45,8 +56,7 @@ function relativeTime(iso: string | null): string {
   const h = Math.floor(m / 60)
   if (h < 24) return `${h}h ago`
   const d = Math.floor(h / 24)
-  if (d < 30) return `${d}d ago`
-  return `${Math.floor(d / 30)}mo ago`
+  return `${d}d ago`
 }
 
 function fmtUptime(sec: number | null): string {
@@ -57,9 +67,18 @@ function fmtUptime(sec: number | null): string {
   return `${m}m`
 }
 
-function statusLabel(d: Device): string {
-  if (!d.is_active) return 'Inactive'
-  return isOnline(d) ? 'Online' : 'Offline'
+function getPlotName(plotId: string | null): string {
+  if (!plotId) return 'Unassigned'
+  const plot = plotsStore.plots.find(p => p.id === plotId)
+  return plot ? plot.name : 'Unknown Plot'
+}
+
+function getDeviceName(d: Device): string {
+  if (d.kind === 'gateway') return 'Main Controller (Hub)'
+  const plotName = getPlotName(d.plot_id)
+  if (d.kind === 'sensor') return `${plotName} Sensor`
+  if (d.kind === 'actuator') return `${plotName} Controls`
+  return d.serial
 }
 
 function statusClass(d: Device): string {
@@ -78,34 +97,36 @@ function eventIcon(e: DeviceEvent): any {
   return e.event_type === 'error' ? AlertCircle : CheckCircle
 }
 
-const filtered = computed(() => {
+// Computed Lists
+const filteredDevices = computed(() => {
   const q = search.value.toLowerCase().trim()
   return devices.value.filter((d) => {
-    if (q && !d.serial.toLowerCase().includes(q) &&
-        !(d.model || '').toLowerCase().includes(q)) {
-      return false
-    }
-    if (kindFilter.value && d.kind !== kindFilter.value) return false
+    const plotName = getPlotName(d.plot_id).toLowerCase()
+    if (q && !d.serial.toLowerCase().includes(q) && !plotName.includes(q)) return false
     if (statusFilter.value === 'online' && !isOnline(d)) return false
     if (statusFilter.value === 'offline' && isOnline(d)) return false
     return true
   })
 })
 
+const hubs = computed(() => filteredDevices.value.filter(d => d.kind === 'gateway'))
+const sensors = computed(() => filteredDevices.value.filter(d => d.kind === 'sensor'))
+const actuators = computed(() => filteredDevices.value.filter(d => d.kind === 'actuator'))
+
 const counts = computed(() => {
   let online = 0
-  let offline = 0
-  for (const d of devices.value) {
-    if (isOnline(d)) online++
-    else offline++
-  }
-  return { online, offline }
+  for (const d of devices.value) { if (isOnline(d)) online++ }
+  return { online, offline: devices.value.length - online, total: devices.value.length }
 })
 
+// Actions
 async function load() {
   loading.value = true
   error.value = null
   try {
+    if (plotsStore.plots.length === 0) {
+      await plotsStore.fetchAll()
+    }
     devices.value = await devicesApi.list()
   } catch (e: any) {
     error.value = e?.response?.data?.detail || 'Failed to load devices'
@@ -116,10 +137,32 @@ async function load() {
 
 function openCommand(d: Device) {
   activeDevice.value = d
-  actionChoice.value = 'irrigation.start'
+  actionChoice.value = d.kind === 'actuator' ? 'irrigation.start' : 'reboot'
   actionParams.value = '{}'
   sendResult.value = null
   showModal.value = true
+}
+
+function openAssign(d: Device) {
+  assigningDevice.value = d
+  selectedPlotId.value = d.plot_id || ''
+  showAssignModal.value = true
+}
+
+async function saveAssignment() {
+  if (!assigningDevice.value) return
+  assigning.value = true
+  try {
+    await devicesApi.update(assigningDevice.value.id, { 
+      plot_id: selectedPlotId.value || null 
+    })
+    showAssignModal.value = false
+    await load()
+  } catch (e) {
+    alert("Failed to assign plot")
+  } finally {
+    assigning.value = false
+  }
 }
 
 async function sendCommand() {
@@ -129,16 +172,10 @@ async function sendCommand() {
   try {
     let params: Record<string, unknown> = {}
     try { params = JSON.parse(actionParams.value) } catch {
-      sendResult.value = 'Invalid JSON in params'
-      sending.value = false
-      return
+      sendResult.value = 'Invalid JSON in params'; sending.value = false; return
     }
-    const resp = await devicesApi.sendTestCommand(
-      activeDevice.value.id,
-      actionChoice.value,
-      params,
-    )
-    sendResult.value = `Sent ${resp.cmd_id} to ${resp.topic}`
+    await devicesApi.sendTestCommand(activeDevice.value.id, actionChoice.value, params)
+    sendResult.value = `Command sent successfully.`
   } catch (e: any) {
     sendResult.value = e?.response?.data?.detail || 'Failed to send'
   } finally {
@@ -148,13 +185,12 @@ async function sendCommand() {
 
 async function toggleEvents(d: Device) {
   if (expandedDeviceId.value === d.id) {
-    expandedDeviceId.value = null
-    return
+    expandedDeviceId.value = null; return
   }
   expandedDeviceId.value = d.id
   loadingEvents.value = d.id
   try {
-    deviceEvents.value[d.id] = await devicesApi.events(d.id, 15)
+    deviceEvents.value[d.id] = await devicesApi.events(d.id, 10)
   } catch {
     deviceEvents.value[d.id] = []
   } finally {
@@ -163,18 +199,18 @@ async function toggleEvents(d: Device) {
 }
 
 onMounted(load)
-
 setInterval(load, 15000)
 </script>
 
 <template>
-  <div class="max-w-6xl mx-auto space-y-6">
+  <div class="max-w-5xl mx-auto space-y-8 pb-20">
 
+    <!-- Header -->
     <div class="flex items-start justify-between gap-4 flex-wrap">
       <div>
-        <h1 class="page-title">Devices</h1>
+        <h1 class="page-title">Farm Hardware</h1>
         <p class="page-subtitle">
-          {{ counts.online }} online · {{ counts.offline }} offline
+          {{ counts.online }} systems online · {{ counts.total }} total registered
         </p>
       </div>
       <button class="btn-ghost text-sm" @click="load" :disabled="loading">
@@ -183,245 +219,234 @@ setInterval(load, 15000)
       </button>
     </div>
 
+    <!-- Filters -->
     <div class="flex flex-wrap gap-3">
       <div class="relative flex-1 min-w-[200px]">
         <Search :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
-        <input
-          v-model="search"
-          type="text"
-          placeholder="Search by serial or model…"
-          class="input pl-9"
-        />
+        <input v-model="search" type="text" placeholder="Search by plot name or serial…" class="input pl-9" />
       </div>
-      <select v-model="kindFilter" class="input w-40">
-        <option value="">All kinds</option>
-        <option value="sensor">Sensor</option>
-        <option value="actuator">Actuator</option>
-        <option value="gateway">Gateway</option>
-      </select>
       <select v-model="statusFilter" class="input w-40">
         <option value="">All status</option>
-        <option value="online">Online</option>
-        <option value="offline">Offline</option>
+        <option value="online">Online Only</option>
+        <option value="offline">Offline Only</option>
       </select>
     </div>
 
-    <div v-if="loading && devices.length === 0"
-         class="text-muted flex items-center gap-2">
-      <Loader2 :size="16" class="animate-spin" /> Loading devices…
+    <div v-if="loading && devices.length === 0" class="text-muted flex items-center gap-2">
+      <Loader2 :size="16" class="animate-spin" /> Loading hardware…
     </div>
-
     <div v-else-if="error" class="card text-danger">{{ error }}</div>
 
-    <div v-else-if="filtered.length === 0" class="card text-center py-12">
-      <Cpu :size="32" :stroke-width="1.5" class="mx-auto text-muted mb-3" />
-      <h3 class="font-semibold text-lg">No devices</h3>
-      <p class="text-sm text-muted mt-1.5">
-        {{ devices.length === 0
-            ? 'Register a device or run the simulator to get started.'
-            : 'No devices match the current filters.' }}
-      </p>
-    </div>
+    <div v-else class="space-y-10">
 
-    <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4">
-      <div v-for="d in filtered" :key="d.id" class="card">
-        <div class="flex items-start justify-between gap-3 mb-4">
-          <div class="min-w-0">
-            <div class="font-mono text-sm font-semibold truncate">
-              {{ d.serial }}
-            </div>
-            <div class="text-xs text-muted mt-1 flex items-center gap-2 flex-wrap">
-              <span v-if="d.model">{{ d.model }}</span>
-              <span v-if="d.chip_type">· {{ d.chip_type }}</span>
-              <span v-if="d.hw_version">· {{ d.hw_version }}</span>
-            </div>
-          </div>
-          <div class="flex items-center gap-1.5 shrink-0">
-            <component
-              :is="isOnline(d) ? Wifi : WifiOff"
-              :size="14"
-              :class="statusClass(d)"
-              :stroke-width="2"
-            />
-            <span :class="['text-xs font-medium', statusClass(d)]">
-              {{ statusLabel(d) }}
-            </span>
-          </div>
+      <!-- ================= HUBS ================= -->
+      <section v-if="hubs.length > 0" class="space-y-4">
+        <div class="flex items-center gap-2 border-b border-border pb-2">
+          <Server :size="18" class="text-accent" />
+          <h2 class="text-lg font-semibold">Central Controller</h2>
         </div>
-
-        <div class="grid grid-cols-3 gap-3 py-3 border-t border-b border-border">
-          <div>
-            <div class="text-[10px] uppercase tracking-wide text-muted flex items-center gap-1">
-              <Activity :size="10" /> Uptime
-            </div>
-            <div class="text-sm font-medium tabular-nums mt-1">
-              {{ fmtUptime(d.uptime_sec) }}
-            </div>
-          </div>
-          <div>
-            <div class="text-[10px] uppercase tracking-wide text-muted flex items-center gap-1">
-              <Signal :size="10" /> RSSI
-            </div>
-            <div class="text-sm font-medium tabular-nums mt-1">
-              {{ d.rssi_dbm !== null ? `${d.rssi_dbm} dBm` : '—' }}
-            </div>
-          </div>
-          <div>
-            <div class="text-[10px] uppercase tracking-wide text-muted flex items-center gap-1">
-              <Battery :size="10" /> Battery
-            </div>
-            <div class="text-sm font-medium tabular-nums mt-1">
-              {{ d.battery_v !== null ? `${d.battery_v.toFixed(2)}V` : '—' }}
-            </div>
-          </div>
-        </div>
-
-        <div class="flex items-center justify-between mt-3 gap-2">
-          <div class="text-xs text-muted">
-            Last seen: {{ relativeTime(d.last_seen_at) }}
-          </div>
-          <div class="flex items-center gap-2">
-            <button
-              class="btn-ghost text-xs py-1 px-3"
-              @click="toggleEvents(d)"
-            >
-              <component
-                :is="expandedDeviceId === d.id ? ChevronDown : ChevronRight"
-                :size="11"
-              />
-              Activity
-            </button>
-            <button
-              class="btn-ghost text-xs py-1 px-3"
-              @click="openCommand(d)"
-            >
-              <Play :size="11" /> Test command
-            </button>
-          </div>
-        </div>
-
-        <div
-          v-if="expandedDeviceId === d.id"
-          class="mt-3 pt-3 border-t border-border space-y-2"
-        >
-          <div
-            v-if="loadingEvents === d.id"
-            class="text-xs text-muted flex items-center gap-1.5"
-          >
-            <Loader2 :size="11" class="animate-spin" /> Loading…
-          </div>
-          <div
-            v-else-if="!deviceEvents[d.id] || deviceEvents[d.id].length === 0"
-            class="text-xs text-muted"
-          >
-            No activity yet.
-          </div>
-          <template v-else>
-            <div
-              v-for="e in deviceEvents[d.id]"
-              :key="e.id"
-              class="flex items-start gap-2 text-xs"
-            >
-              <component
-                :is="eventIcon(e)"
-                :size="12"
-                :class="['shrink-0 mt-0.5', eventTone(e)]"
-              />
-              <div class="flex-1 min-w-0">
-                <div class="font-mono truncate">
-                  <span v-if="e.event_type === 'ack'">
-                    ack {{ e.cmd_id }} → {{ e.status }}
-                    <span v-if="e.duration_ms" class="text-muted">
-                      ({{ e.duration_ms }}ms)
-                    </span>
-                  </span>
-                  <span v-else-if="e.event_type === 'error'">
-                    {{ e.action }}: {{ e.error }}
-                  </span>
-                  <span v-else>
-                    {{ e.event_type }} {{ e.action || '' }}
-                  </span>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div v-for="d in hubs" :key="d.id" class="card border-accent/30 shadow-[0_0_15px_rgba(var(--accent),0.05)]">
+            <div class="flex items-center justify-between mb-4">
+              <div class="flex items-center gap-3">
+                <div class="p-2 bg-accent/10 rounded-full text-accent"><Cpu :size="20" /></div>
+                <div>
+                  <div class="font-semibold">{{ getDeviceName(d) }}</div>
+                  <div class="text-xs text-muted font-mono">{{ d.serial }}</div>
                 </div>
               </div>
-              <div class="text-[10px] text-muted whitespace-nowrap">
-                {{ relativeTime(e.occurred_at) }}
+              <div class="flex items-center gap-1.5">
+                <component :is="isOnline(d) ? Wifi : WifiOff" :size="14" :class="statusClass(d)" />
+                <span :class="['text-xs font-medium', statusClass(d)]">{{ isOnline(d) ? 'Online' : 'Offline' }}</span>
               </div>
             </div>
-          </template>
+            <div class="grid grid-cols-3 gap-2 py-3 border-t border-border text-sm">
+               <div><span class="text-muted text-xs">Uptime</span><br>{{ fmtUptime(d.uptime_sec) }}</div>
+               <div><span class="text-muted text-xs">Signal</span><br>{{ d.rssi_dbm ?? '—' }} dBm</div>
+               <div><span class="text-muted text-xs">Last seen</span><br>{{ relativeTime(d.last_seen_at) }}</div>
+            </div>
+          </div>
         </div>
+      </section>
 
-        <div
-          v-if="d.last_error_code"
-          class="mt-3 text-xs text-danger bg-danger/10 rounded-sm px-2 py-1.5 flex items-start gap-1.5"
-        >
-          <AlertCircle :size="12" class="shrink-0 mt-0.5" />
-          <span>{{ d.last_error_code }}: {{ d.last_error_message }}</span>
+      <!-- ================= SENSORS ================= -->
+      <section v-if="sensors.length > 0" class="space-y-4">
+        <div class="flex items-center gap-2 border-b border-border pb-2">
+          <Thermometer :size="18" class="text-water" />
+          <h2 class="text-lg font-semibold">Sensors</h2>
         </div>
-      </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div v-for="d in sensors" :key="d.id" class="card">
+            <div class="flex items-start justify-between mb-4">
+              <div>
+                <div class="font-semibold flex items-center gap-2">
+                  {{ getDeviceName(d) }}
+                  <span class="text-[10px] bg-card-hover px-2 py-0.5 rounded text-muted border border-border">Wireless</span>
+                  <button @click="openAssign(d)" class="text-muted hover:text-accent transition-colors" title="Assign to Crop Cycle">
+                    <PenBox :size="12"/>
+                  </button>
+                </div>
+                <div class="text-xs text-muted font-mono mt-1">{{ d.serial }}</div>
+              </div>
+              <div class="flex items-center gap-1.5">
+                <component :is="isOnline(d) ? Wifi : WifiOff" :size="14" :class="statusClass(d)" />
+                <span :class="['text-xs font-medium', statusClass(d)]">{{ isOnline(d) ? 'Online' : 'Offline' }}</span>
+              </div>
+            </div>
+            
+            <div class="grid grid-cols-2 gap-3 py-3 border-t border-b border-border">
+              <div class="flex items-center gap-2">
+                <Battery :size="16" :class="d.battery_v && d.battery_v < 3.5 ? 'text-danger' : 'text-success'" />
+                <div>
+                  <div class="text-[10px] uppercase text-muted">Battery</div>
+                  <div class="text-sm font-medium">{{ d.battery_v ? `${d.battery_v.toFixed(2)}V` : '—' }}</div>
+                </div>
+              </div>
+              <div>
+                <div class="text-[10px] uppercase text-muted">Last Report</div>
+                <div class="text-sm font-medium">{{ relativeTime(d.last_seen_at) }}</div>
+              </div>
+            </div>
+
+            <div class="mt-3 flex justify-between items-center">
+              <button class="btn-ghost text-xs py-1 px-3" @click="toggleEvents(d)">
+                <Activity :size="12" class="mr-1" /> Activity
+              </button>
+            </div>
+
+            <!-- Events Dropdown -->
+            <div v-if="expandedDeviceId === d.id" class="mt-3 pt-3 border-t border-border space-y-2">
+              <div v-if="loadingEvents === d.id" class="text-xs text-muted flex items-center gap-1.5">
+                <Loader2 :size="11" class="animate-spin" /> Loading…
+              </div>
+              <div v-else-if="!deviceEvents[d.id] || deviceEvents[d.id].length === 0" class="text-xs text-muted">
+                No recent activity.
+              </div>
+              <div v-else v-for="e in deviceEvents[d.id]" :key="e.id" class="flex items-start gap-2 text-xs">
+                <component :is="eventIcon(e)" :size="12" :class="['shrink-0 mt-0.5', eventTone(e)]" />
+                <div class="flex-1 min-w-0">
+                  <div class="font-mono truncate">
+                    <span v-if="e.event_type === 'ack'">ack {{ e.cmd_id }} → {{ e.status }}</span>
+                    <span v-else-if="e.event_type === 'error'">{{ e.action }}: {{ e.error }}</span>
+                    <span v-else>{{ e.event_type }} {{ e.action || '' }}</span>
+                  </div>
+                </div>
+                <div class="text-[10px] text-muted whitespace-nowrap">{{ relativeTime(e.occurred_at) }}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= ACTUATORS ================= -->
+      <section v-if="actuators.length > 0" class="space-y-4">
+        <div class="flex items-center gap-2 border-b border-border pb-2">
+          <Power :size="18" class="text-warning" />
+          <h2 class="text-lg font-semibold">Actuators</h2>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div v-for="d in actuators" :key="d.id" class="card border-warning/30">
+            <div class="flex items-start justify-between mb-4">
+              <div>
+                <div class="font-semibold flex items-center gap-2">
+                  {{ getDeviceName(d) }}
+                  <span class="text-[10px] bg-card-hover px-2 py-0.5 rounded text-muted border border-border">Wired (RS485)</span>
+                  <button @click="openAssign(d)" class="text-muted hover:text-accent transition-colors" title="Assign to Crop Cycle">
+                    <PenBox :size="12"/>
+                  </button>
+                </div>
+                <div class="text-xs text-muted font-mono mt-1">{{ d.serial }}</div>
+              </div>
+              <div class="flex items-center gap-1.5">
+                <component :is="isOnline(d) ? Wifi : WifiOff" :size="14" :class="statusClass(d)" />
+                <span :class="['text-xs font-medium', statusClass(d)]">{{ isOnline(d) ? 'Online' : 'Offline' }}</span>
+              </div>
+            </div>
+
+            <div class="flex items-center justify-between py-3 border-t border-b border-border">
+               <div class="flex items-center gap-2">
+                 <Droplets :size="16" class="text-water" />
+                 <div>
+                   <div class="text-[10px] uppercase text-muted">Current State</div>
+                   <div class="text-sm font-medium">Ready</div>
+                 </div>
+               </div>
+               <button class="btn-primary text-xs py-1.5 px-4 shadow-lg shadow-warning/20" @click="openCommand(d)">
+                 <Play :size="12" class="mr-1" /> Control
+               </button>
+            </div>
+          </div>
+        </div>
+      </section>
+      
     </div>
 
-    <div
-      v-if="showModal && activeDevice"
-      class="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
-      @click.self="showModal = false"
-    >
-      <div class="bg-card border border-border rounded w-full max-w-md p-5 space-y-4">
+    <!-- Test Command Modal -->
+    <div v-if="showModal && activeDevice" class="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" @click.self="showModal = false">
+      <div class="bg-card border border-border rounded-xl w-full max-w-md p-6 space-y-4 shadow-2xl">
         <div class="flex items-center justify-between">
-          <h2 class="text-lg font-semibold">Send test command</h2>
-          <button class="text-muted hover:text-text" @click="showModal = false">
-            <X :size="18" />
-          </button>
+          <h2 class="text-lg font-semibold">Control {{ getDeviceName(activeDevice) }}</h2>
+          <button class="text-muted hover:text-text" @click="showModal = false"><X :size="18" /></button>
         </div>
-
-        <div class="text-xs text-muted font-mono">
+        
+        <div class="text-xs text-muted font-mono bg-card-hover p-2 rounded">
           {{ activeDevice.serial }}
         </div>
 
         <div>
-          <label class="block text-xs uppercase tracking-wide text-muted mb-1">
-            Action
-          </label>
+          <label class="block text-xs uppercase tracking-wide text-muted mb-1">Action</label>
           <select v-model="actionChoice" class="input w-full">
-            <option value="irrigation.start">irrigation.start</option>
-            <option value="irrigation.stop">irrigation.stop</option>
-            <option value="valve.open">valve.open</option>
-            <option value="valve.close">valve.close</option>
-            <option value="light.on">light.on</option>
-            <option value="light.off">light.off</option>
-            <option value="relay.pulse">relay.pulse</option>
-            <option value="reboot">reboot</option>
+            <template v-if="activeDevice.kind === 'actuator'">
+              <option value="irrigation.start">Turn Pump ON</option>
+              <option value="irrigation.stop">Turn Pump OFF</option>
+              <option value="valve.open">Open Valve</option>
+              <option value="valve.close">Close Valve</option>
+            </template>
+            <option value="reboot">Reboot Device</option>
           </select>
         </div>
 
-        <div>
-          <label class="block text-xs uppercase tracking-wide text-muted mb-1">
-            Params (JSON)
-          </label>
-          <textarea
-            v-model="actionParams"
-            rows="2"
-            class="input w-full font-mono text-xs"
-            placeholder='{"duration_sec": 60}'
-          />
+        <div v-if="actionChoice === 'irrigation.start' || actionChoice === 'valve.open'">
+          <label class="block text-xs uppercase tracking-wide text-muted mb-1">Params (JSON)</label>
+          <textarea v-model="actionParams" rows="2" class="input w-full font-mono text-xs" placeholder='{"duration_sec": 60}' />
+          <p class="text-[10px] text-muted mt-1">Provide a duration to auto-shutoff. Empty means run forever.</p>
         </div>
 
-        <div
-          v-if="sendResult"
-          class="text-xs bg-card-hover rounded-sm px-3 py-2"
-        >
+        <div v-if="sendResult" class="text-xs bg-card-hover rounded p-3 font-medium">
           {{ sendResult }}
         </div>
 
         <div class="flex justify-end gap-2 pt-2">
-          <button class="btn-ghost text-sm" @click="showModal = false">Close</button>
-          <button
-            class="btn-primary text-sm"
-            :disabled="sending"
-            @click="sendCommand"
-          >
+          <button class="btn-ghost text-sm" @click="showModal = false">Cancel</button>
+          <button class="btn-primary text-sm shadow-lg shadow-accent/20" :disabled="sending" @click="sendCommand">
             <Loader2 v-if="sending" :size="14" class="animate-spin" />
             <Play v-else :size="14" />
-            Send
+            Send Command
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Assign Plot Modal -->
+    <div v-if="showAssignModal && assigningDevice" class="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" @click.self="showAssignModal = false">
+      <div class="bg-card border border-border rounded-xl w-full max-w-sm p-6 space-y-4 shadow-2xl">
+        <h2 class="text-lg font-semibold">Assign Device</h2>
+        <div class="text-xs text-muted font-mono bg-card-hover p-2 rounded">{{ assigningDevice.serial }}</div>
+        
+        <div>
+          <label class="block text-xs uppercase text-muted mb-1">Select Crop Cycle (Plot)</label>
+          <select v-model="selectedPlotId" class="input w-full">
+            <option value="">-- Unassigned --</option>
+            <option v-for="plot in plotsStore.plots" :key="plot.id" :value="plot.id">
+              {{ plot.name }} ({{ plot.crop }})
+            </option>
+          </select>
+        </div>
+
+        <div class="flex justify-end gap-2 pt-2">
+          <button class="btn-ghost text-sm" @click="showAssignModal = false">Cancel</button>
+          <button class="btn-primary text-sm" :disabled="assigning" @click="saveAssignment">
+            <Loader2 v-if="assigning" :size="14" class="animate-spin" /> Save
           </button>
         </div>
       </div>

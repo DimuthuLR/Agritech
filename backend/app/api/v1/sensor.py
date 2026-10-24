@@ -1,27 +1,9 @@
 """
 Sensor endpoints.
-
-HTTP:
-    POST /sensor/readings          — device-authenticated ingest (HMAC)
-    GET  /sensor/readings          — tenant-authenticated query (JWT)
-    GET  /sensor/readings/summary  — aggregated (continuous aggregates)
-
-WebSocket:
-    WS   /sensor/ws/{plot_id}      — live stream (JWT via query param)
-
-Feature flag: 'sensors' gates the tenant-facing query/summary/stream
-endpoints. The device ingest endpoint is intentionally ungated — devices
-keep reporting even if the tenant temporarily loses read access, so no
-readings are lost.
-
-Design note on WebSocket auth:
-    Browsers cannot set custom headers on WebSocket connections. We accept
-    the JWT as a query parameter. In production, prefer a short-lived,
-    single-use "ticket" endpoint (GET /auth/ws-ticket) to avoid tokens
-    appearing in access logs. Phase 12 hardening item.
 """
 import asyncio
 import uuid
+import logging
 from datetime import datetime, timezone, timedelta
 
 from fastapi import (
@@ -35,6 +17,7 @@ from starlette.concurrency import run_in_threadpool
 from app.api.deps import require_tenant_role, require_feature
 from app.core.device_auth import verify_device_signature
 from app.core.security import decode_token, TokenError
+from app.db.models.device import Device
 from app.db.models.plot import Plot
 from app.db.models.sensor_reading import SensorReading
 from app.db.models.user import User, TenantRole
@@ -48,12 +31,13 @@ from app.schemas.sensor import (
 )
 from app.services import features_service as fs
 
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sensor", tags=["sensor"])
 
 
 # ===========================================================================
-# HTTP — Ingest (device-authenticated, intentionally ungated)
+# HTTP — Ingest (device-authenticated)
 # ===========================================================================
 
 @router.post(
@@ -62,18 +46,6 @@ router = APIRouter(prefix="/sensor", tags=["sensor"])
     status_code=status.HTTP_201_CREATED,
 )
 async def ingest_reading(request: Request, db: Session = Depends(get_db)):
-    """
-    Device-authenticated ingest.
-
-    Required headers:
-      X-Device-Serial — the device's serial number
-      X-Timestamp     — Unix timestamp (seconds)
-      X-Signature     — HMAC-SHA256 hex of f"{serial}.{timestamp}.{raw_body}"
-
-    Note: this endpoint does NOT check the 'sensors' feature flag.
-    Devices keep reporting regardless — readings are preserved so they
-    can be seen again the moment the feature is re-enabled.
-    """
     raw_body = await request.body()
 
     serial = request.headers.get("X-Device-Serial")
@@ -102,20 +74,33 @@ async def ingest_reading(request: Request, db: Session = Depends(get_db)):
             detail=f"Unknown metric {payload.metric!r}. Valid: {sorted(VALID_METRICS)}",
         )
 
+    # Determine the ACTUAL device (Hub vs Satellite)
+    actual_device = device
+    if payload.source_device_serial:
+        satellite = db.query(Device).filter(
+            Device.serial == payload.source_device_serial,
+            Device.tenant_id == device.tenant_id
+        ).first()
+        
+        if satellite:
+            actual_device = satellite
+            satellite.last_seen_at = datetime.now(timezone.utc)
+        else:
+            log.warning(f"Hub {device.serial} forwarded data for unknown device {payload.source_device_serial}")
+
     reading_time = payload.time or datetime.now(timezone.utc)
 
     from sqlalchemy.dialects.postgresql import insert as pg_insert
     stmt = pg_insert(SensorReading).values(
         time=reading_time,
-        device_id=device.id,
+        device_id=actual_device.id,
         metric=payload.metric,
-        tenant_id=device.tenant_id,
-        plot_id=device.plot_id,
+        tenant_id=actual_device.tenant_id,
+        plot_id=actual_device.plot_id,
         value=payload.value,
     ).on_conflict_do_nothing()
 
     db.execute(stmt)
-
     device.last_seen_at = datetime.now(timezone.utc)
     db.commit()
 
@@ -137,27 +122,16 @@ def list_readings(
     until: datetime | None = None,
     limit: int = 500,
 ):
-    """Query readings for the caller's tenant, newest first."""
     require_feature(db, user.tenant_id, "sensors")
-
     q = db.query(SensorReading).filter(SensorReading.tenant_id == user.tenant_id)
 
-    if device_id is not None:
-        q = q.filter(SensorReading.device_id == device_id)
-    if plot_id is not None:
-        q = q.filter(SensorReading.plot_id == plot_id)
-    if metric is not None:
-        q = q.filter(SensorReading.metric == metric)
-    if since is not None:
-        q = q.filter(SensorReading.time >= since)
-    if until is not None:
-        q = q.filter(SensorReading.time <= until)
+    if device_id is not None: q = q.filter(SensorReading.device_id == device_id)
+    if plot_id is not None: q = q.filter(SensorReading.plot_id == plot_id)
+    if metric is not None: q = q.filter(SensorReading.metric == metric)
+    if since is not None: q = q.filter(SensorReading.time >= since)
+    if until is not None: q = q.filter(SensorReading.time <= until)
 
-    return (
-        q.order_by(SensorReading.time.desc())
-        .limit(min(limit, 5000))
-        .all()
-    )
+    return q.order_by(SensorReading.time.desc()).limit(min(limit, 5000)).all()
 
 
 # ===========================================================================
@@ -166,14 +140,9 @@ def list_readings(
 
 ALLOWED_BUCKETS = {"1h": "sensor_1h", "6h": "sensor_6h"}
 ALLOWED_WINDOWS = {
-    "1h": "1 hour",
-    "6h": "6 hours",
-    "24h": "24 hours",
-    "7d": "7 days",
-    "30d": "30 days",
-    "90d": "90 days",
+    "1h": "1 hour", "6h": "6 hours", "24h": "24 hours",
+    "7d": "7 days", "30d": "30 days", "90d": "90 days",
 }
-
 
 @router.get("/readings/summary", response_model=list[SummaryBucket])
 def summary_readings(
@@ -186,9 +155,7 @@ def summary_readings(
     metric: str | None = None,
     limit: int = 500,
 ):
-    """Return pre-aggregated readings from a continuous aggregate view."""
     require_feature(db, user.tenant_id, "sensors")
-
     from sqlalchemy import text
 
     if bucket not in ALLOWED_BUCKETS:
@@ -200,11 +167,9 @@ def summary_readings(
     interval = ALLOWED_WINDOWS[window]
 
     sql = f"""
-        SELECT bucket, device_id, metric,
-               avg_value, min_value, max_value, sample_count
+        SELECT bucket, device_id, metric, avg_value, min_value, max_value, sample_count
         FROM {view}
-        WHERE tenant_id = :tenant_id
-          AND bucket > NOW() - INTERVAL '{interval}'
+        WHERE tenant_id = :tenant_id AND bucket > NOW() - INTERVAL '{interval}'
     """
     params = {"tenant_id": str(user.tenant_id)}
 
@@ -229,96 +194,39 @@ def summary_readings(
 # WebSocket — Live stream
 # ===========================================================================
 
-def _fetch_new_readings(
-    plot_id: uuid.UUID,
-    since: datetime,
-) -> list[dict]:
-    """
-    Fetch readings newer than `since` for a plot.
-
-    Runs in a thread pool so the WebSocket event loop isn't blocked.
-    Opens its own DB session to avoid sharing state across the async task.
-    """
+def _fetch_new_readings(plot_id: uuid.UUID, since: datetime) -> list[dict]:
     db = SessionLocal()
     try:
         rows = (
             db.query(SensorReading)
-            .filter(
-                SensorReading.plot_id == plot_id,
-                SensorReading.time > since,
-            )
-            .order_by(SensorReading.time.asc())
-            .limit(100)
-            .all()
+            .filter(SensorReading.plot_id == plot_id, SensorReading.time > since)
+            .order_by(SensorReading.time.asc()).limit(100).all()
         )
-        return [
-            {
-                "time": r.time.isoformat(),
-                "device_id": str(r.device_id),
-                "metric": r.metric,
-                "value": r.value,
-            }
-            for r in rows
-        ]
+        return [{"time": r.time.isoformat(), "device_id": str(r.device_id), "metric": r.metric, "value": r.value} for r in rows]
     finally:
         db.close()
 
-
-def _lookup_plot_for_user(
-    plot_id: uuid.UUID,
-    user_id: uuid.UUID,
-) -> tuple[bool, str]:
-    """
-    Return (allowed, reason) for a WebSocket connect attempt.
-
-    Checks:
-      1. User exists and is active
-      2. Plot belongs to user's tenant
-      3. 'sensors' feature is enabled for the tenant
-
-    Runs in a thread pool so the async WS handler isn't blocked.
-    """
+def _lookup_plot_for_user(plot_id: uuid.UUID, user_id: uuid.UUID) -> tuple[bool, str]:
     db = SessionLocal()
     try:
         user = db.get(User, user_id)
-        if user is None or not user.is_active:
+        if user is None or not user.is_active or user.tenant_id is None:
             return False, "unauthorized"
-
-        if user.tenant_id is None:
-            return False, "unauthorized"
-
         if not fs.is_enabled(db, user.tenant_id, "sensors"):
             return False, "feature_disabled"
-
-        plot = (
-            db.query(Plot)
-            .filter(Plot.id == plot_id, Plot.tenant_id == user.tenant_id)
-            .first()
-        )
+        plot = db.query(Plot).filter(Plot.id == plot_id, Plot.tenant_id == user.tenant_id).first()
         if plot is None:
             return False, "plot_not_found"
-
         return True, "ok"
     finally:
         db.close()
 
-
 @router.websocket("/ws/{plot_id}")
 async def sensor_stream(websocket: WebSocket, plot_id: uuid.UUID):
-    """
-    Live sensor reading stream for a plot.
-
-    Client connects with ?token=<JWT>. Server verifies:
-      - the token is valid
-      - the user's tenant owns the plot
-      - the tenant's 'sensors' feature is enabled
-
-    Close codes:
-      4401 — missing or invalid token
-      4403 — feature disabled
-      4404 — plot not found or not owned by caller
-    """
-    # --- Auth ---
+    # 1. Accept the connection FIRST so the browser doesn't throw Error 1006
+    await websocket.accept()
+    
+    # 2. Now check auth
     token = websocket.query_params.get("token")
     if not token:
         await websocket.close(code=4401, reason="Missing token")
@@ -331,43 +239,30 @@ async def sensor_stream(websocket: WebSocket, plot_id: uuid.UUID):
         await websocket.close(code=4401, reason="Invalid token")
         return
 
-    # --- Ownership + feature check (threadpool; sync DB queries) ---
     allowed, reason = await run_in_threadpool(_lookup_plot_for_user, plot_id, user_id)
     if not allowed:
         code = 4403 if reason == "feature_disabled" else 4404
         await websocket.close(code=code, reason=reason)
         return
 
-    await websocket.accept()
-
-    # --- Stream loop ---
-    # Start from 5 minutes ago so the client immediately gets recent history.
+    # 3. Stream loop
     last_seen = datetime.now(timezone.utc) - timedelta(minutes=5)
-
     try:
         while True:
             try:
-                readings = await run_in_threadpool(
-                    _fetch_new_readings, plot_id, last_seen,
-                )
+                readings = await run_in_threadpool(_fetch_new_readings, plot_id, last_seen)
                 for r in readings:
                     await websocket.send_json(r)
-                    # Advance the cursor using the reading's own timestamp
                     reading_time = datetime.fromisoformat(r["time"])
                     if reading_time > last_seen:
                         last_seen = reading_time
             except WebSocketDisconnect:
                 break
             except Exception:
-                # Log and continue — a single bad query shouldn't kill the stream
                 pass
-
-            # Sleep between polls. Kept modest so the chart feels "live".
             await asyncio.sleep(2.0)
     except WebSocketDisconnect:
         pass
     finally:
-        try:
-            await websocket.close()
-        except Exception:
-            pass
+        try: await websocket.close()
+        except Exception: pass

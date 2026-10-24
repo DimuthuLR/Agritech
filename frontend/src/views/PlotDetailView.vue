@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeft, Leaf, Activity, Wallet,
@@ -48,8 +48,17 @@ const recentDiagnoses = computed(() =>
     .filter((d) => d.status === 'complete')
     .slice(0, 3),
 )
+
 // --- Live sensor stream ---
 const sensors = useSensorStream(plotId.value)
+
+// Watch for the route to be fully ready, then connect the stream
+watch(plotId, (newId) => {
+  if (newId) {
+    sensors.disconnect() // Close any old connection
+    sensors.connect()    // Open the new connection
+  }
+})
 
 const soilData = computed(() => sensors.series.value.soil_moisture ?? [])
 const tempData = computed(() => sensors.series.value.temperature ?? [])
@@ -146,8 +155,6 @@ onMounted(async () => {
   loadAll()
 
   // 2. Load 24h of hourly sensor history (from continuous aggregates).
-  //    This runs in parallel with the WebSocket connect — whichever
-  //    completes first, the seed() merge handles both orderings.
   sensorsApi
     .summary(plotId.value, '1h', '24h')
     .then((buckets) => {
@@ -168,8 +175,10 @@ onMounted(async () => {
       // Silent — the live stream will still populate as data arrives
     })
 
-  // 3. Connect the live stream
-  sensors.connect()
+  // 3. Connect the live stream (in case the watcher already triggered)
+  if (plotId.value) {
+    sensors.connect()
+  }
 })
 </script>
 

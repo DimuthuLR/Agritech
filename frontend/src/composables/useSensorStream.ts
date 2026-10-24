@@ -54,18 +54,25 @@ export function useSensorStream(plotId: string) {
   }
 
   function connect() {
-    const token = localStorage.getItem('access_token')
-    if (!token) {
-      error.value = 'No auth token'
+    if (!plotId) {
+      console.warn("Skipping WebSocket connect: Plot ID is missing.")
       return
     }
 
-    // Some browsers/backends require the token as a query param for WS
-    // (can't set Authorization headers on WebSocket)
+    const token = localStorage.getItem('access_token')
+    if (!token) {
+      error.value = 'No auth token'
+      console.error("WebSocket Error: No access token found in localStorage.")
+      return
+    }
+
     const url = `${WS_BASE}/sensor/ws/${plotId}?token=${token}`
+    console.log("🔌 WebSocket Connecting to:", url)
+
     ws = new WebSocket(url)
 
     ws.onopen = () => {
+      console.log("✅ WebSocket Connected Successfully!")
       connected.value = true
       error.value = null
     }
@@ -79,11 +86,13 @@ export function useSensorStream(plotId: string) {
       }
     }
 
-    ws.onerror = () => {
+    ws.onerror = (err) => {
+      console.error("❌ WebSocket Error:", err)
       error.value = 'WebSocket error'
     }
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+      console.warn(`🔌 WebSocket Closed. Code: ${event.code}, Reason: "${event.reason}"`)
       connected.value = false
     }
   }

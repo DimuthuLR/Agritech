@@ -89,9 +89,19 @@ async def heartbeat(
             detail=f"Invalid heartbeat body: {e}",
         )
 
+    # Look for the satellite if the Hub is forwarding data
+    actual_device = device
+    if payload.source_device_serial:
+        sat = db.query(Device).filter(
+            Device.serial == payload.source_device_serial,
+            Device.tenant_id == device.tenant_id
+        ).first()
+        if sat:
+            actual_device = sat
+
     record_heartbeat(
         db,
-        device,
+        actual_device,  # <-- Changed from 'device' to 'actual_device'
         uptime_sec=payload.uptime_sec,
         free_heap_kb=payload.free_heap_kb,
         rssi_dbm=payload.rssi_dbm,

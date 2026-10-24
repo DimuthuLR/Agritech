@@ -49,14 +49,13 @@ class DeviceRegisterResponse(BaseModel):
 
 
 class DeviceHeartbeatRequest(BaseModel):
-    """Body for POST /iot/heartbeat. HMAC-signed like readings."""
-    uptime_sec: int = Field(..., ge=0)
-    free_heap_kb: int = Field(..., ge=0)
-    rssi_dbm: int = Field(..., ge=-120, le=0)
-    battery_v: float | None = Field(None, ge=0, le=10)
-    fw_version: str | None = Field(None, max_length=64)
-    ts: int = Field(..., description="Unix timestamp (seconds)")
-
+    uptime_sec: int
+    free_heap_kb: int
+    rssi_dbm: int
+    battery_v: float | None = None
+    fw_version: str
+    ts: int
+    source_device_serial: str | None = None 
 
 class DeviceHeartbeatResponse(BaseModel):
     status: str = "ok"
