@@ -36,8 +36,6 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/devices", tags=["devices"])
 
 
-# --- Schemas -----------------------------------------------------------------
-
 class DeviceEventRead(BaseModel):
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
@@ -51,8 +49,6 @@ class DeviceEventRead(BaseModel):
     occurred_at: datetime
     metadata: dict = Field(default_factory=dict, validation_alias="metadata_")
 
-
-# --- Helpers ------------------------------------------------------------------
 
 def _verify_plot_ownership(db: Session, plot_id: uuid.UUID, tenant_id: uuid.UUID) -> Plot:
     plot = (
@@ -95,8 +91,6 @@ def _serialize(device: Device, secret: str | None = None) -> dict:
         data["secret_key"] = secret
     return data
 
-
-# --- Endpoints ----------------------------------------------------------------
 
 @router.post("", response_model=DeviceCreated, status_code=status.HTTP_201_CREATED)
 def create_device(
@@ -265,8 +259,7 @@ def test_command(
     db: Session = Depends(get_db),
 ):
     """
-    Queue a test command for a device.
-    The S3 Hub will pick this up via HTTP Long Polling.
+    Queue a test command. If sent to a satellite, it routes to the Gateway (Hub).
     """
     require_feature(db, user.tenant_id, "sensors")
 
@@ -281,33 +274,41 @@ def test_command(
     cmd_id = f"c_{secrets.token_hex(6)}"
     now = int(time.time())
     
-    # Construct the command payload
+    # Find the Gateway (Hub) for this tenant
+    gateway = db.query(Device).filter(
+        Device.tenant_id == user.tenant_id, 
+        Device.kind == 'gateway'
+    ).first()
+    
+    if not gateway:
+        raise HTTPException(status_code=404, detail="No gateway/hub registered for this tenant")
+
     command_body = {
         "cmd_id": cmd_id,
         "action": payload.action,
         "params": payload.params,
+        "target_device_serial": device.serial, # Tell hub who this is for
         "issued_at": now,
         "expires_at": now + 300,
     }
 
-    # Add to the in-memory queue for the Hub to poll
-    str_device_id = str(device_id)
-    if str_device_id not in COMMAND_QUEUES:
-        COMMAND_QUEUES[str_device_id] = []
+    # Queue it for the GATEWAY, not the satellite
+    str_gateway_id = str(gateway.id)
+    if str_gateway_id not in COMMAND_QUEUES:
+        COMMAND_QUEUES[str_gateway_id] = []
     
-    COMMAND_QUEUES[str_device_id].append(command_body)
+    COMMAND_QUEUES[str_gateway_id].append(command_body)
 
     log.info(
-        f"[devices] TEST_COMMAND queued device={device.serial} "
-        f"action={payload.action} cmd_id={cmd_id} by={user.email}"
+        f"[devices] TEST_COMMAND queued for gateway={gateway.serial} "
+        f"target={device.serial} action={payload.action} cmd_id={cmd_id} by={user.email}"
     )
 
-    # Return a response that mimics the old MQTT one
     return TestCommandResponse(
         device_id=device.id,
         cmd_id=cmd_id,
         action=payload.action,
-        topic=f"http://poll/command/{device.id}",
+        topic=f"http://poll/command/{gateway.id}",
     )
 
 

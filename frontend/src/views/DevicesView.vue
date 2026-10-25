@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { devicesApi } from '../api/devices'
+import { api } from '../api/client'
 import type { Device, DeviceEvent } from '../types/device'
 import { usePlotsStore } from '../stores/plots'
 import {
@@ -14,6 +15,9 @@ const loading = ref(true)
 const error = ref<string | null>(null)
 const search = ref('')
 const statusFilter = ref<string>('')
+
+// Actuator States
+const actuatorStates = ref<Record<string, { pump: boolean, valve: boolean }>>({})
 
 // Modals
 const showModal = ref(false)
@@ -128,6 +132,29 @@ async function load() {
       await plotsStore.fetchAll()
     }
     devices.value = await devicesApi.list()
+
+    const acts = devices.value.filter(d => d.kind === 'actuator')
+    for (const d of acts) {
+      try {
+        const { data: pData } = await api.get('/sensor/readings', { 
+          params: { device_id: d.id, metric: 'pump_state', limit: 1 } 
+        })
+        const pState = pData.length > 0 ? pData[0].value : 0
+        
+        const { data: vData } = await api.get('/sensor/readings', { 
+          params: { device_id: d.id, metric: 'valve_state', limit: 1 } 
+        })
+        const vState = vData.length > 0 ? vData[0].value : 0
+
+        actuatorStates.value[d.id] = {
+          pump: pState === 1,
+          valve: vState === 1
+        }
+      } catch {
+        actuatorStates.value[d.id] = { pump: false, valve: false }
+      }
+    }
+
   } catch (e: any) {
     error.value = e?.response?.data?.detail || 'Failed to load devices'
   } finally {
@@ -199,13 +226,12 @@ async function toggleEvents(d: Device) {
 }
 
 onMounted(load)
-setInterval(load, 15000)
+setInterval(load, 5000)
 </script>
 
 <template>
   <div class="max-w-5xl mx-auto space-y-8 pb-20">
 
-    <!-- Header -->
     <div class="flex items-start justify-between gap-4 flex-wrap">
       <div>
         <h1 class="page-title">Farm Hardware</h1>
@@ -219,7 +245,6 @@ setInterval(load, 15000)
       </button>
     </div>
 
-    <!-- Filters -->
     <div class="flex flex-wrap gap-3">
       <div class="relative flex-1 min-w-[200px]">
         <Search :size="14" class="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
@@ -239,7 +264,6 @@ setInterval(load, 15000)
 
     <div v-else class="space-y-10">
 
-      <!-- ================= HUBS ================= -->
       <section v-if="hubs.length > 0" class="space-y-4">
         <div class="flex items-center gap-2 border-b border-border pb-2">
           <Server :size="18" class="text-accent" />
@@ -269,7 +293,6 @@ setInterval(load, 15000)
         </div>
       </section>
 
-      <!-- ================= SENSORS ================= -->
       <section v-if="sensors.length > 0" class="space-y-4">
         <div class="flex items-center gap-2 border-b border-border pb-2">
           <Thermometer :size="18" class="text-water" />
@@ -314,7 +337,6 @@ setInterval(load, 15000)
               </button>
             </div>
 
-            <!-- Events Dropdown -->
             <div v-if="expandedDeviceId === d.id" class="mt-3 pt-3 border-t border-border space-y-2">
               <div v-if="loadingEvents === d.id" class="text-xs text-muted flex items-center gap-1.5">
                 <Loader2 :size="11" class="animate-spin" /> Loading…
@@ -338,7 +360,6 @@ setInterval(load, 15000)
         </div>
       </section>
 
-      <!-- ================= ACTUATORS ================= -->
       <section v-if="actuators.length > 0" class="space-y-4">
         <div class="flex items-center gap-2 border-b border-border pb-2">
           <Power :size="18" class="text-warning" />
@@ -365,10 +386,12 @@ setInterval(load, 15000)
 
             <div class="flex items-center justify-between py-3 border-t border-b border-border">
                <div class="flex items-center gap-2">
-                 <Droplets :size="16" class="text-water" />
+                 <Droplets :size="16" :class="actuatorStates[d.id]?.pump ? 'text-success animate-pulse' : 'text-water'" />
                  <div>
                    <div class="text-[10px] uppercase text-muted">Current State</div>
-                   <div class="text-sm font-medium">Ready</div>
+                   <div class="text-sm font-medium" :class="actuatorStates[d.id]?.pump ? 'text-success font-bold' : ''">
+                     {{ actuatorStates[d.id]?.pump ? 'Pump Running' : 'Ready' }}
+                   </div>
                  </div>
                </div>
                <button class="btn-primary text-xs py-1.5 px-4 shadow-lg shadow-warning/20" @click="openCommand(d)">
@@ -381,7 +404,6 @@ setInterval(load, 15000)
       
     </div>
 
-    <!-- Test Command Modal -->
     <div v-if="showModal && activeDevice" class="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" @click.self="showModal = false">
       <div class="bg-card border border-border rounded-xl w-full max-w-md p-6 space-y-4 shadow-2xl">
         <div class="flex items-center justify-between">
@@ -427,7 +449,6 @@ setInterval(load, 15000)
       </div>
     </div>
 
-    <!-- Assign Plot Modal -->
     <div v-if="showAssignModal && assigningDevice" class="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" @click.self="showAssignModal = false">
       <div class="bg-card border border-border rounded-xl w-full max-w-sm p-6 space-y-4 shadow-2xl">
         <h2 class="text-lg font-semibold">Assign Device</h2>

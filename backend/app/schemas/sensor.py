@@ -5,14 +5,17 @@ import uuid
 from datetime import datetime
 from pydantic import BaseModel, Field, ConfigDict
 
+# Canonical metric names.
 VALID_METRICS = {
-    "soil_moisture",
-    "temperature",
-    "humidity",
-    "ec",
-    "ph",
-    "light",
-    "co2",
+    "soil_moisture",   # volumetric water content (0.0–1.0)
+    "temperature",     # °C
+    "humidity",        # relative humidity (0.0–1.0)
+    "ec",              # electrical conductivity (mS/cm)
+    "ph",              # pH
+    "light",           # lux
+    "co2",             # ppm
+    "pump_state",      # 0 = OFF, 1 = ON
+    "valve_state",     # 0 = CLOSED, 1 = OPEN
 }
 
 class ReadingCreate(BaseModel):
@@ -20,7 +23,7 @@ class ReadingCreate(BaseModel):
     metric: str = Field(..., min_length=1, max_length=32)
     value: float
     time: datetime | None = None
-    # NEW: Allows the Hub to forward data on behalf of a satellite
+    # Allows the Hub to forward data on behalf of a satellite
     source_device_serial: str | None = None
 
 class ReadingRead(BaseModel):
