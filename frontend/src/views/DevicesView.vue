@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { devicesApi } from '../api/devices'
 import { api } from '../api/client'
 import type { Device, DeviceEvent } from '../types/device'
 import { usePlotsStore } from '../stores/plots'
+import { useAuthStore } from '../stores/auth'
 import {
   Loader2, Cpu, Wifi, WifiOff, Battery, Activity,
   Play, Search, X, AlertCircle, CheckCircle,
-  Droplets, Thermometer, Server, Power, PenBox
+  Droplets, Thermometer, Server, Power, PenBox, ShieldAlert
 } from 'lucide-vue-next'
 
 const devices = ref<Device[]>([])
@@ -16,33 +17,53 @@ const error = ref<string | null>(null)
 const search = ref('')
 const statusFilter = ref<string>('')
 
-// Actuator States
 const actuatorStates = ref<Record<string, { pump: boolean, valve: boolean }>>({})
 
-// Modals
 const showModal = ref(false)
 const activeDevice = ref<Device | null>(null)
 const actionChoice = ref('irrigation.start')
 const actionParams = ref<string>('{}')
 const sending = ref(false)
 const sendResult = ref<string | null>(null)
+const isOverride = ref(false)
 
 const showAssignModal = ref(false)
 const assigningDevice = ref<Device | null>(null)
 const selectedPlotId = ref<string>('')
 const assigning = ref(false)
 
-// Events
 const expandedDeviceId = ref<string | null>(null)
 const deviceEvents = ref<Record<string, DeviceEvent[]>>({})
 const loadingEvents = ref<string | null>(null)
 
-// Plots
 const plotsStore = usePlotsStore()
+const authStore = useAuthStore()
 
 const ONLINE_THRESHOLD_SEC = 5 * 60
 
-// Helpers
+const canEdit = computed(() => {
+  const role = authStore.user?.tenant_role
+  if (!role) return false
+  const normalizedRole = role.toLowerCase().replace(/[\s_]/g, '')
+  return normalizedRole === 'tenantadmin' || normalizedRole === 'operator'
+})
+
+// Watch for modal opening to set the smartest default action
+watch(showModal, (val) => {
+  if (val && activeDevice.value && activeDevice.value.kind === 'actuator') {
+    const state = actuatorStates.value[activeDevice.value.id]
+    if (state?.pump) {
+      actionChoice.value = 'irrigation.stop'
+    } else {
+      actionChoice.value = 'irrigation.start'
+    }
+  }
+})
+
+function getControlMode(d: Device): 'auto' | 'manual' {
+  return d.metadata?.control_mode === 'auto' ? 'auto' : 'manual'
+}
+
 function isOnline(d: Device): boolean {
   if (!d.last_seen_at) return false
   const seen = new Date(d.last_seen_at).getTime()
@@ -91,17 +112,17 @@ function statusClass(d: Device): string {
 }
 
 function eventTone(e: DeviceEvent): string {
-  if (e.event_type === 'error') return 'text-danger'
+  if (e.event_type === 'error' || e.event_type === 'manual_override') return 'text-danger'
   if (e.status === 'ok') return 'text-success'
   if (e.status === 'failed' || e.status === 'rejected') return 'text-danger'
   return 'text-muted'
 }
 
 function eventIcon(e: DeviceEvent): any {
+  if (e.event_type === 'manual_override') return ShieldAlert
   return e.event_type === 'error' ? AlertCircle : CheckCircle
 }
 
-// Computed Lists
 const filteredDevices = computed(() => {
   const q = search.value.toLowerCase().trim()
   return devices.value.filter((d) => {
@@ -123,7 +144,6 @@ const counts = computed(() => {
   return { online, offline: devices.value.length - online, total: devices.value.length }
 })
 
-// Actions
 async function load() {
   loading.value = true
   error.value = null
@@ -162,11 +182,23 @@ async function load() {
   }
 }
 
+async function toggleMode(d: Device) {
+  const currentMode = getControlMode(d)
+  const newMode = currentMode === 'auto' ? 'manual' : 'auto'
+  const newMeta = { ...d.metadata, control_mode: newMode }
+  try {
+    await devicesApi.update(d.id, { metadata: newMeta })
+    await load()
+  } catch {
+    alert("Failed to change mode")
+  }
+}
+
 function openCommand(d: Device) {
   activeDevice.value = d
-  actionChoice.value = d.kind === 'actuator' ? 'irrigation.start' : 'reboot'
   actionParams.value = '{}'
   sendResult.value = null
+  isOverride.value = getControlMode(d) === 'auto'
   showModal.value = true
 }
 
@@ -231,7 +263,6 @@ setInterval(load, 5000)
 
 <template>
   <div class="max-w-5xl mx-auto space-y-8 pb-20">
-
     <div class="flex items-start justify-between gap-4 flex-wrap">
       <div>
         <h1 class="page-title">Farm Hardware</h1>
@@ -263,7 +294,6 @@ setInterval(load, 5000)
     <div v-else-if="error" class="card text-danger">{{ error }}</div>
 
     <div v-else class="space-y-10">
-
       <section v-if="hubs.length > 0" class="space-y-4">
         <div class="flex items-center gap-2 border-b border-border pb-2">
           <Server :size="18" class="text-accent" />
@@ -305,7 +335,7 @@ setInterval(load, 5000)
                 <div class="font-semibold flex items-center gap-2">
                   {{ getDeviceName(d) }}
                   <span class="text-[10px] bg-card-hover px-2 py-0.5 rounded text-muted border border-border">Wireless</span>
-                  <button @click="openAssign(d)" class="text-muted hover:text-accent transition-colors" title="Assign to Crop Cycle">
+                  <button v-if="canEdit" @click="openAssign(d)" class="text-muted hover:text-accent transition-colors" title="Assign to Crop Cycle">
                     <PenBox :size="12"/>
                   </button>
                 </div>
@@ -350,6 +380,7 @@ setInterval(load, 5000)
                   <div class="font-mono truncate">
                     <span v-if="e.event_type === 'ack'">ack {{ e.cmd_id }} → {{ e.status }}</span>
                     <span v-else-if="e.event_type === 'error'">{{ e.action }}: {{ e.error }}</span>
+                    <span v-else-if="e.event_type === 'manual_override'">Manual override by {{ e.metadata.user }}</span>
                     <span v-else>{{ e.event_type }} {{ e.action || '' }}</span>
                   </div>
                 </div>
@@ -372,7 +403,7 @@ setInterval(load, 5000)
                 <div class="font-semibold flex items-center gap-2">
                   {{ getDeviceName(d) }}
                   <span class="text-[10px] bg-card-hover px-2 py-0.5 rounded text-muted border border-border">Wired (RS485)</span>
-                  <button @click="openAssign(d)" class="text-muted hover:text-accent transition-colors" title="Assign to Crop Cycle">
+                  <button v-if="canEdit" @click="openAssign(d)" class="text-muted hover:text-accent transition-colors" title="Assign to Crop Cycle">
                     <PenBox :size="12"/>
                   </button>
                 </div>
@@ -385,30 +416,56 @@ setInterval(load, 5000)
             </div>
 
             <div class="flex items-center justify-between py-3 border-t border-b border-border">
-               <div class="flex items-center gap-2">
-                 <Droplets :size="16" :class="actuatorStates[d.id]?.pump ? 'text-success animate-pulse' : 'text-water'" />
-                 <div>
-                   <div class="text-[10px] uppercase text-muted">Current State</div>
-                   <div class="text-sm font-medium" :class="actuatorStates[d.id]?.pump ? 'text-success font-bold' : ''">
-                     {{ actuatorStates[d.id]?.pump ? 'Pump Running' : 'Ready' }}
+               <div class="flex items-center gap-4">
+                 <div class="flex items-center gap-2">
+                   <Droplets :size="16" :class="actuatorStates[d.id]?.pump ? 'text-success animate-pulse' : 'text-water'" />
+                   <div>
+                     <div class="text-[10px] uppercase text-muted">State</div>
+                     <div class="text-sm font-medium" :class="actuatorStates[d.id]?.pump ? 'text-success font-bold' : ''">
+                       {{ actuatorStates[d.id]?.pump ? 'Running' : 'Ready' }}
+                     </div>
+                   </div>
+                 </div>
+                 
+                 <div class="pl-4 border-l border-border flex flex-col items-start">
+                   <div class="text-[10px] uppercase text-muted mb-1">Mode</div>
+                   <div class="flex items-center gap-2 cursor-pointer" @click="canEdit && toggleMode(d)">
+                     <span class="text-[10px] font-bold uppercase transition-colors" :class="getControlMode(d) === 'auto' ? 'text-success' : 'text-muted'">Auto</span>
+                     
+                     <div class="relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors"
+                          :class="getControlMode(d) === 'auto' ? 'bg-success/30' : 'bg-warning/30'">
+                       <span class="inline-block h-3.5 w-3.5 transform rounded-full shadow ring-0 transition duration-200 ease-in-out"
+                             :class="getControlMode(d) === 'auto' ? 'translate-x-4.5 bg-success' : 'translate-x-0.5 bg-warning'">
+                       </span>
+                     </div>
+
+                     <span class="text-[10px] font-bold uppercase transition-colors" :class="getControlMode(d) === 'manual' ? 'text-warning' : 'text-muted'">Manual</span>
                    </div>
                  </div>
                </div>
-               <button class="btn-primary text-xs py-1.5 px-4 shadow-lg shadow-warning/20" @click="openCommand(d)">
+               
+               <button v-if="canEdit" class="btn-primary text-xs py-1.5 px-4 shadow-lg shadow-warning/20" @click="openCommand(d)">
                  <Play :size="12" class="mr-1" /> Control
                </button>
             </div>
           </div>
         </div>
       </section>
-      
     </div>
 
+    <!-- Test Command Modal -->
     <div v-if="showModal && activeDevice" class="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" @click.self="showModal = false">
       <div class="bg-card border border-border rounded-xl w-full max-w-md p-6 space-y-4 shadow-2xl">
         <div class="flex items-center justify-between">
           <h2 class="text-lg font-semibold">Control {{ getDeviceName(activeDevice) }}</h2>
           <button class="text-muted hover:text-text" @click="showModal = false"><X :size="18" /></button>
+        </div>
+
+        <div v-if="isOverride" class="bg-danger/10 border border-danger/30 rounded p-3 flex gap-2 text-danger text-xs">
+          <ShieldAlert :size="16" class="shrink-0 mt-0.5" />
+          <div>
+            <strong>System Override!</strong> This device is in Auto mode. Sending a manual command will temporarily override the automated system and will be logged in the audit trail.
+          </div>
         </div>
         
         <div class="text-xs text-muted font-mono bg-card-hover p-2 rounded">
@@ -419,10 +476,19 @@ setInterval(load, 5000)
           <label class="block text-xs uppercase tracking-wide text-muted mb-1">Action</label>
           <select v-model="actionChoice" class="input w-full">
             <template v-if="activeDevice.kind === 'actuator'">
-              <option value="irrigation.start">Turn Pump ON</option>
-              <option value="irrigation.stop">Turn Pump OFF</option>
-              <option value="valve.open">Open Valve</option>
-              <option value="valve.close">Close Valve</option>
+              <!-- Disable options based on current state -->
+              <option value="irrigation.start" :disabled="actuatorStates[activeDevice.id]?.pump">
+                Turn Pump ON {{ actuatorStates[activeDevice.id]?.pump ? '(Already Running)' : '' }}
+              </option>
+              <option value="irrigation.stop" :disabled="!actuatorStates[activeDevice.id]?.pump">
+                Turn Pump OFF {{ !actuatorStates[activeDevice.id]?.pump ? '(Already Off)' : '' }}
+              </option>
+              <option value="valve.open" :disabled="actuatorStates[activeDevice.id]?.valve">
+                Open Valve {{ actuatorStates[activeDevice.id]?.valve ? '(Already Open)' : '' }}
+              </option>
+              <option value="valve.close" :disabled="!actuatorStates[activeDevice.id]?.valve">
+                Close Valve {{ !actuatorStates[activeDevice.id]?.valve ? '(Already Closed)' : '' }}
+              </option>
             </template>
             <option value="reboot">Reboot Device</option>
           </select>
@@ -443,12 +509,13 @@ setInterval(load, 5000)
           <button class="btn-primary text-sm shadow-lg shadow-accent/20" :disabled="sending" @click="sendCommand">
             <Loader2 v-if="sending" :size="14" class="animate-spin" />
             <Play v-else :size="14" />
-            Send Command
+            {{ isOverride ? 'Confirm Override' : 'Send Command' }}
           </button>
         </div>
       </div>
     </div>
 
+    <!-- Assign Plot Modal -->
     <div v-if="showAssignModal && assigningDevice" class="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" @click.self="showAssignModal = false">
       <div class="bg-card border border-border rounded-xl w-full max-w-sm p-6 space-y-4 shadow-2xl">
         <h2 class="text-lg font-semibold">Assign Device</h2>
@@ -472,6 +539,5 @@ setInterval(load, 5000)
         </div>
       </div>
     </div>
-
   </div>
 </template>

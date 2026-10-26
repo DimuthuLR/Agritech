@@ -6,7 +6,7 @@ import logging
 import secrets
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -28,7 +28,6 @@ from app.schemas.device import (
     TestCommandResponse,
 )
 
-# Import the queue from iot.py
 from app.api.v1.iot import COMMAND_QUEUES
 
 log = logging.getLogger(__name__)
@@ -258,9 +257,6 @@ def test_command(
     user: User = Depends(require_tenant_role(TenantRole.OPERATOR)),
     db: Session = Depends(get_db),
 ):
-    """
-    Queue a test command. If sent to a satellite, it routes to the Gateway (Hub).
-    """
     require_feature(db, user.tenant_id, "sensors")
 
     device = (
@@ -274,7 +270,6 @@ def test_command(
     cmd_id = f"c_{secrets.token_hex(6)}"
     now = int(time.time())
     
-    # Find the Gateway (Hub) for this tenant
     gateway = db.query(Device).filter(
         Device.tenant_id == user.tenant_id, 
         Device.kind == 'gateway'
@@ -287,17 +282,33 @@ def test_command(
         "cmd_id": cmd_id,
         "action": payload.action,
         "params": payload.params,
-        "target_device_serial": device.serial, # Tell hub who this is for
+        "target_device_serial": device.serial,
         "issued_at": now,
         "expires_at": now + 300,
     }
 
-    # Queue it for the GATEWAY, not the satellite
     str_gateway_id = str(gateway.id)
     if str_gateway_id not in COMMAND_QUEUES:
         COMMAND_QUEUES[str_gateway_id] = []
     
     COMMAND_QUEUES[str_gateway_id].append(command_body)
+
+    control_mode = device.metadata_.get("control_mode", "manual")
+    if control_mode == "auto":
+        # Log the override event for audit (FIXED: Added tenant_id)
+        event = DeviceEvent(
+            tenant_id=device.tenant_id,
+            device_id=device.id,
+            event_type="manual_override",
+            cmd_id=cmd_id,
+            action=payload.action,
+            status="success",
+            occurred_at=datetime.now(timezone.utc),
+            metadata_={"user": user.email, "reason": "User manually triggered command in Auto mode"}
+        )
+        db.add(event)
+        db.commit()
+        log.warning(f"[devices] MANUAL OVERRIDE by {user.email} on Auto device {device.serial}")
 
     log.info(
         f"[devices] TEST_COMMAND queued for gateway={gateway.serial} "
