@@ -7,7 +7,7 @@ machine. Every transition writes to audit_log automatically.
 Endpoints:
     GET    /tasks              — list (optionally filtered by plot)
     GET    /tasks/{id}         — fetch one
-    POST   /tasks/{id}/approve — pending_approval → approved
+    POST   /tasks/{id}/approve — pending_approval → approved → dispatched
     POST   /tasks/{id}/reject  — pending_approval → rejected
 """
 import uuid
@@ -25,6 +25,7 @@ from app.services.task_service import (
     approve_task,
     reject_task,
 )
+from app.services.dispatch_service import dispatch_task, DispatchError
 
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -87,8 +88,8 @@ def approve(
     db: Session = Depends(get_db),
 ):
     """
-    Approve a pending task. Only OPERATOR or above can approve.
-    Enforces status = 'pending_approval'.
+    Approve a pending task and dispatch it to the hardware.
+    Only OPERATOR or above can approve.
     """
     # Tenant ownership check before delegating to task_service
     task = (
@@ -100,7 +101,24 @@ def approve(
         raise HTTPException(status_code=404, detail="Task not found")
 
     try:
-        return approve_task(db, task_id, user.id)
+        # 1. Move status: PENDING_APPROVAL -> APPROVED
+        approved_task = approve_task(db, task_id, user.id)
+        
+        # 2. Move status: APPROVED -> DISPATCHED (pushes to Hub queue)
+        try:
+            dispatch_task(db, task_id)
+        except DispatchError as e:
+            # If dispatch fails, the task is still APPROVED in the DB,
+            # but the hardware hasn't been told yet. 
+            raise HTTPException(
+                status_code=502, 
+                detail=f"Task approved, but hardware dispatch failed: {str(e)}"
+            )
+            
+        # Refresh to get the DISPATCHED status
+        db.refresh(approved_task)
+        return approved_task
+
     except TaskNotFound:
         raise HTTPException(status_code=404, detail="Task not found")
     except IllegalTransition as e:

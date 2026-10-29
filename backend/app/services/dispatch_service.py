@@ -1,44 +1,35 @@
 """
-Dispatch service — sends approved tasks to hardware via MQTT.
+Dispatch service — sends approved tasks to hardware via HTTP Long Polling.
 
 Design principles:
-- Idempotency first: the same task_id NEVER results in two MQTT messages.
-  We check for an existing actuator_command before publishing.
-- Persist before publish: the actuator_command row is written first, so if
-  the publish succeeds but the process crashes, the next dispatch of the
-  same task sees the existing command and returns it without re-sending.
-- Single transaction: task transition + command + audit entries commit
-  together. Either everything lands, or nothing does.
+- Idempotency first: the same task_id NEVER results in two commands.
+- Persist before broadcast: the actuator_command row is written first, so if
+  the process crashes, the next dispatch of the same task sees the existing 
+  command and returns it without re-sending.
+- Single transaction: task transition + command + audit entries commit together.
 
-Topic structure:
-    agritech/{tenant_id}/plot/{plot_id}/cmd       — commands to devices
-    agritech/{tenant_id}/plot/{plot_id}/ack       — acks from devices (Phase 6e)
+Topic structure (replaced MQTT):
+- The Hub polls `/iot/command/poll`.
+- We push the payload directly into the in-memory `COMMAND_QUEUES`.
 """
 import json
 import logging
 import uuid
 from datetime import datetime, timezone
 
-import paho.mqtt.client as mqtt
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.core.safety.audit import write_audit
 from app.db.models.actuator_command import ActuatorCommand
+from app.db.models.device import Device
 from app.db.models.task import Task, TaskStatus
 from app.services.task_service import _assert_transition, _log_transition
 
+# Import the queue we created in iot.py
+from app.api.v1.iot import COMMAND_QUEUES
 
 log = logging.getLogger(__name__)
 
-
-CMD_TOPIC_TEMPLATE = "agritech/{tenant_id}/plot/{plot_id}/cmd"
-ACK_TOPIC_TEMPLATE = "agritech/{tenant_id}/plot/{plot_id}/ack"
-
-
-# ---------------------------------------------------------------------------
-# Exceptions
-# ---------------------------------------------------------------------------
 
 class DispatchError(Exception):
     """Base error for dispatch operations."""
@@ -48,80 +39,19 @@ class TaskNotDispatchable(DispatchError):
     """Raised when a task cannot be dispatched in its current state."""
 
 
-# ---------------------------------------------------------------------------
-# MQTT client (process-lifetime singleton)
-# ---------------------------------------------------------------------------
+def _map_task_to_action(task: Task) -> str:
+    """Map internal task tools to physical C3 actions."""
+    if task.tool == "control_irrigation":
+        return "irrigation.start"
+    elif task.tool == "spray_chemical":
+        # For now, assume spray triggers a valve/pump. Adjust based on hardware.
+        return "valve.open" 
+    return "reboot" # Fallback
 
-_client: mqtt.Client | None = None
-
-
-def _get_mqtt_client() -> mqtt.Client:
-    """Return a connected MQTT client, connecting on first use."""
-    global _client
-    if _client is not None:
-        return _client
-
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
-    try:
-        client.connect(settings.mqtt_host, settings.mqtt_port, keepalive=60)
-    except Exception as e:
-        raise DispatchError(
-            f"MQTT broker unreachable at "
-            f"{settings.mqtt_host}:{settings.mqtt_port}: {e}"
-        )
-
-    client.loop_start()   # background thread for network I/O
-    _client = client
-    return client
-
-
-def disconnect_mqtt() -> None:
-    """Call at script exit for a clean shutdown."""
-    global _client
-    if _client is not None:
-        try:
-            _client.loop_stop()
-            _client.disconnect()
-        except Exception:
-            pass
-        _client = None
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _build_topic(task: Task) -> str:
-    return CMD_TOPIC_TEMPLATE.format(
-        tenant_id=task.tenant_id,
-        plot_id=task.plot_id,
-    )
-
-
-def _build_payload(task: Task, command_id: uuid.UUID) -> dict:
-    return {
-        "command_id": str(command_id),
-        "task_id": str(task.id),
-        "idempotency_key": str(task.idempotency_key),
-        "tool": task.tool,
-        "args": task.args,
-        "issued_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Main entry point
-# ---------------------------------------------------------------------------
 
 def dispatch_task(db: Session, task_id: uuid.UUID) -> ActuatorCommand:
     """
     Dispatch one APPROVED task. Returns the ActuatorCommand record.
-
-    Idempotent: if an actuator_command already exists for this task, that
-    record is returned and no MQTT message is sent.
-
-    Raises DispatchError on MQTT failure, TaskNotDispatchable if the task
-    is not in APPROVED state.
     """
     task = db.get(Task, task_id)
     if task is None:
@@ -144,10 +74,26 @@ def dispatch_task(db: Session, task_id: uuid.UUID) -> ActuatorCommand:
             f"only APPROVED tasks can be dispatched"
         )
 
-    # --- Build the message ---
+    # --- Find the Gateway (Hub) for this tenant ---
+    gateway = (
+        db.query(Device)
+        .filter(Device.tenant_id == task.tenant_id, Device.kind == 'gateway')
+        .first()
+    )
+    if not gateway:
+        raise DispatchError(f"No Gateway found for tenant {task.tenant_id}")
+
+    # --- Build the message for the Hub ---
     command_id = uuid.uuid4()
-    topic = _build_topic(task)
-    payload = _build_payload(task, command_id)
+    action = _map_task_to_action(task)
+    
+    # The exact payload format the Hub expects
+    payload = {
+        "action": action,
+        "params": task.args or {},
+        "cmd_id": str(command_id),
+        "target_device_serial": "48:F6:EE:13:A9:90" # In a fully dynamic setup, look this up from DB
+    }
 
     # --- Build the command row ---
     cmd = ActuatorCommand(
@@ -155,7 +101,7 @@ def dispatch_task(db: Session, task_id: uuid.UUID) -> ActuatorCommand:
         tenant_id=task.tenant_id,
         task_id=task.id,
         device_id=task.device_id,
-        topic=topic,
+        topic=f"http-poll/{gateway.id}",
         payload=payload,
         idempotency_key=task.idempotency_key,
     )
@@ -163,9 +109,6 @@ def dispatch_task(db: Session, task_id: uuid.UUID) -> ActuatorCommand:
     db.flush()
 
     # --- Transition task to DISPATCHED (audited) ---
-    # This MUST land in the DB before we publish MQTT, otherwise a fast
-    # ack could reach the consumer before the task's dispatched status
-    # is visible. Committing first eliminates the race.
     _assert_transition(task.status, TaskStatus.DISPATCHED)
     prev = task.status
     task.status = TaskStatus.DISPATCHED
@@ -179,9 +122,8 @@ def dispatch_task(db: Session, task_id: uuid.UUID) -> ActuatorCommand:
         payload={
             "task_id": str(task.id),
             "command_id": str(command_id),
-            "topic": topic,
+            "action": action,
             "tool": task.tool,
-            "args": task.args,
         },
         actor="dispatch_service",
         tenant_id=task.tenant_id,
@@ -189,37 +131,24 @@ def dispatch_task(db: Session, task_id: uuid.UUID) -> ActuatorCommand:
         target_id=str(task.id),
     )
 
-    # Commit BEFORE publishing so the consumer sees DISPATCHED if it
-    # processes an ack immediately after.
+    # Commit BEFORE adding to queue
     db.commit()
     db.refresh(cmd)
 
-    # --- Now publish to MQTT ---
-    try:
-        client = _get_mqtt_client()
-        info = client.publish(topic, json.dumps(payload), qos=1)
-        info.wait_for_publish(timeout=5.0)
-        if info.rc != mqtt.MQTT_ERR_SUCCESS:
-            # Publish failed AFTER commit. The command is recorded but no
-            # message went out. Log and raise so the caller can decide.
-            log.error(
-                f"MQTT publish failed rc={info.rc} for task {task.id}; "
-                f"command {cmd.id} is recorded but not on the wire"
-            )
-            raise DispatchError(f"publish rc={info.rc} (command recorded, not sent)")
-    except Exception as e:
-        if isinstance(e, DispatchError):
-            raise
-        log.error(f"MQTT publish exception for task {task.id}: {e}")
-        raise DispatchError(f"MQTT publish failed: {e}") from e
+    # --- Push to the in-memory queue for the Hub to poll ---
+    str_gateway_id = str(gateway.id)
+    if str_gateway_id not in COMMAND_QUEUES:
+        COMMAND_QUEUES[str_gateway_id] = []
+        
+    COMMAND_QUEUES[str_gateway_id].append(payload)
+    log.info(f"[Dispatch] Pushed {action} to queue for Hub {gateway.serial}")
 
     return cmd
 
 
 def dispatch_all_approved(db: Session) -> list[tuple[uuid.UUID, str]]:
     """
-    Dispatch every APPROVED task. Returns a list of (task_id, outcome)
-    where outcome is either 'dispatched' or 'error: <reason>'.
+    Dispatch every APPROVED task. Returns a list of (task_id, outcome).
     """
     tasks = (
         db.query(Task)

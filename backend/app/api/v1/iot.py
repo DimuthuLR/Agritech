@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
+from fastapi import Query
+
 
 from app.api.deps import require_platform_role
 from app.core.device_auth import verify_device_signature
@@ -130,3 +132,35 @@ def queue_command(device_id: str, payload: dict):
         COMMAND_QUEUES[device_id] = []
     COMMAND_QUEUES[device_id].append(payload)
     return {"status": "queued"}
+
+
+
+@router.get("/config")
+def get_device_config(serial: str = Query(..., description="The serial of the Hub requesting config"), db: Session = Depends(get_db)):
+    """
+    Called by the Hub on boot to discover its satellites.
+    Returns a mapping of MAC addresses to their kind (sensor/actuator).
+    """
+    # Find the hub
+    hub = db.query(Device).filter(Device.serial == serial, Device.kind == 'gateway').first()
+    if not hub:
+        raise HTTPException(status_code=404, detail="Gateway not found")
+    
+    # Find all devices in the same tenant
+    devices = db.query(Device).filter(Device.tenant_id == hub.tenant_id).all()
+    
+    config = {
+        "sensors": {},
+        "actuators": {}
+    }
+    
+    for d in devices:
+        if d.kind == 'sensor':
+            config["sensors"][d.serial] = {"plot_id": str(d.plot_id) if d.plot_id else None}
+        elif d.kind == 'actuator':
+            config["actuators"][d.serial] = {
+                "plot_id": str(d.plot_id) if d.plot_id else None,
+                "control_mode": d.metadata_.get("control_mode", "manual")
+            }
+            
+    return config

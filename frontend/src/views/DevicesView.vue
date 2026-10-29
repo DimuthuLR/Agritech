@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { devicesApi } from '../api/devices'
 import { api } from '../api/client'
 import type { Device, DeviceEvent } from '../types/device'
 import { usePlotsStore } from '../stores/plots'
 import { useAuthStore } from '../stores/auth'
+import QrcodeVue from 'qrcode.vue'
 import {
   Loader2, Cpu, Wifi, WifiOff, Battery, Activity,
   Play, Search, X, AlertCircle, CheckCircle,
-  Droplets, Thermometer, Server, Power, PenBox, ShieldAlert
+  Droplets, Thermometer, Server, Power, PenBox, ShieldAlert, QrCode
 } from 'lucide-vue-next'
 
 const devices = ref<Device[]>([])
@@ -19,6 +20,7 @@ const statusFilter = ref<string>('')
 
 const actuatorStates = ref<Record<string, { pump: boolean, valve: boolean }>>({})
 
+// Modals
 const showModal = ref(false)
 const activeDevice = ref<Device | null>(null)
 const actionChoice = ref('irrigation.start')
@@ -31,6 +33,10 @@ const showAssignModal = ref(false)
 const assigningDevice = ref<Device | null>(null)
 const selectedPlotId = ref<string>('')
 const assigning = ref(false)
+
+// QR Modal
+const showQrModal = ref(false)
+const qrDevice = ref<Device | null>(null)
 
 const expandedDeviceId = ref<string | null>(null)
 const deviceEvents = ref<Record<string, DeviceEvent[]>>({})
@@ -48,20 +54,8 @@ const canEdit = computed(() => {
   return normalizedRole === 'tenantadmin' || normalizedRole === 'operator'
 })
 
-// Watch for modal opening to set the smartest default action
-watch(showModal, (val) => {
-  if (val && activeDevice.value && activeDevice.value.kind === 'actuator') {
-    const state = actuatorStates.value[activeDevice.value.id]
-    if (state?.pump) {
-      actionChoice.value = 'irrigation.stop'
-    } else {
-      actionChoice.value = 'irrigation.start'
-    }
-  }
-})
-
 function getControlMode(d: Device): 'auto' | 'manual' {
-  return d.metadata?.control_mode === 'auto' ? 'auto' : 'manual'
+  return (d.metadata?.control_mode as string) || 'manual'
 }
 
 function isOnline(d: Device): boolean {
@@ -196,6 +190,7 @@ async function toggleMode(d: Device) {
 
 function openCommand(d: Device) {
   activeDevice.value = d
+  actionChoice.value = d.kind === 'actuator' ? 'irrigation.start' : 'reboot'
   actionParams.value = '{}'
   sendResult.value = null
   isOverride.value = getControlMode(d) === 'auto'
@@ -206,6 +201,11 @@ function openAssign(d: Device) {
   assigningDevice.value = d
   selectedPlotId.value = d.plot_id || ''
   showAssignModal.value = true
+}
+
+function openQr(d: Device) {
+  qrDevice.value = d
+  showQrModal.value = true
 }
 
 async function saveAssignment() {
@@ -257,6 +257,11 @@ async function toggleEvents(d: Device) {
   }
 }
 
+// Generate the QR payload
+function getQrPayload(d: Device) {
+  return `https://agra.lk/setup?serial=${d.serial}&tenant=${d.tenant_id}`
+}
+
 onMounted(load)
 setInterval(load, 5000)
 </script>
@@ -294,6 +299,7 @@ setInterval(load, 5000)
     <div v-else-if="error" class="card text-danger">{{ error }}</div>
 
     <div v-else class="space-y-10">
+      <!-- HUBS -->
       <section v-if="hubs.length > 0" class="space-y-4">
         <div class="flex items-center gap-2 border-b border-border pb-2">
           <Server :size="18" class="text-accent" />
@@ -305,7 +311,12 @@ setInterval(load, 5000)
               <div class="flex items-center gap-3">
                 <div class="p-2 bg-accent/10 rounded-full text-accent"><Cpu :size="20" /></div>
                 <div>
-                  <div class="font-semibold">{{ getDeviceName(d) }}</div>
+                  <div class="font-semibold flex items-center gap-2">
+                    {{ getDeviceName(d) }}
+                    <button v-if="canEdit" @click="openQr(d)" class="text-muted hover:text-accent transition-colors" title="Show Provisioning QR Code">
+                      <QrCode :size="14"/>
+                    </button>
+                  </div>
                   <div class="text-xs text-muted font-mono">{{ d.serial }}</div>
                 </div>
               </div>
@@ -323,6 +334,7 @@ setInterval(load, 5000)
         </div>
       </section>
 
+      <!-- SENSORS -->
       <section v-if="sensors.length > 0" class="space-y-4">
         <div class="flex items-center gap-2 border-b border-border pb-2">
           <Thermometer :size="18" class="text-water" />
@@ -337,6 +349,9 @@ setInterval(load, 5000)
                   <span class="text-[10px] bg-card-hover px-2 py-0.5 rounded text-muted border border-border">Wireless</span>
                   <button v-if="canEdit" @click="openAssign(d)" class="text-muted hover:text-accent transition-colors" title="Assign to Crop Cycle">
                     <PenBox :size="12"/>
+                  </button>
+                  <button v-if="canEdit" @click="openQr(d)" class="text-muted hover:text-accent transition-colors" title="Show Provisioning QR Code">
+                    <QrCode :size="12"/>
                   </button>
                 </div>
                 <div class="text-xs text-muted font-mono mt-1">{{ d.serial }}</div>
@@ -391,6 +406,7 @@ setInterval(load, 5000)
         </div>
       </section>
 
+      <!-- ACTUATORS -->
       <section v-if="actuators.length > 0" class="space-y-4">
         <div class="flex items-center gap-2 border-b border-border pb-2">
           <Power :size="18" class="text-warning" />
@@ -405,6 +421,9 @@ setInterval(load, 5000)
                   <span class="text-[10px] bg-card-hover px-2 py-0.5 rounded text-muted border border-border">Wired (RS485)</span>
                   <button v-if="canEdit" @click="openAssign(d)" class="text-muted hover:text-accent transition-colors" title="Assign to Crop Cycle">
                     <PenBox :size="12"/>
+                  </button>
+                  <button v-if="canEdit" @click="openQr(d)" class="text-muted hover:text-accent transition-colors" title="Show Provisioning QR Code">
+                    <QrCode :size="12"/>
                   </button>
                 </div>
                 <div class="text-xs text-muted font-mono mt-1">{{ d.serial }}</div>
@@ -431,14 +450,12 @@ setInterval(load, 5000)
                    <div class="text-[10px] uppercase text-muted mb-1">Mode</div>
                    <div class="flex items-center gap-2 cursor-pointer" @click="canEdit && toggleMode(d)">
                      <span class="text-[10px] font-bold uppercase transition-colors" :class="getControlMode(d) === 'auto' ? 'text-success' : 'text-muted'">Auto</span>
-                     
                      <div class="relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors"
                           :class="getControlMode(d) === 'auto' ? 'bg-success/30' : 'bg-warning/30'">
                        <span class="inline-block h-3.5 w-3.5 transform rounded-full shadow ring-0 transition duration-200 ease-in-out"
                              :class="getControlMode(d) === 'auto' ? 'translate-x-4.5 bg-success' : 'translate-x-0.5 bg-warning'">
                        </span>
                      </div>
-
                      <span class="text-[10px] font-bold uppercase transition-colors" :class="getControlMode(d) === 'manual' ? 'text-warning' : 'text-muted'">Manual</span>
                    </div>
                  </div>
@@ -451,6 +468,29 @@ setInterval(load, 5000)
           </div>
         </div>
       </section>
+    </div>
+
+    <!-- QR Code Modal -->
+    <div v-if="showQrModal && qrDevice" class="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 backdrop-blur-sm" @click.self="showQrModal = false">
+      <div class="bg-card border border-border rounded-xl w-full max-w-sm p-6 flex flex-col items-center text-center shadow-2xl">
+        <div class="w-full flex justify-between items-center mb-4">
+          <h2 class="text-lg font-bold">Device QR Code</h2>
+          <button class="text-muted hover:text-text" @click="showQrModal = false"><X :size="18" /></button>
+        </div>
+        
+        <div class="bg-white p-4 rounded-xl shadow-inner mb-4">
+          <QrcodeVue :value="getQrPayload(qrDevice)" :size="200" level="H" />
+        </div>
+
+        <div class="text-sm font-semibold">{{ getDeviceName(qrDevice) }}</div>
+        <div class="text-xs text-muted font-mono bg-card-hover px-3 py-1 rounded mt-2">{{ qrDevice.serial }}</div>
+        
+        <p class="text-xs text-muted mt-4 leading-relaxed">
+          Print this QR code and stick it to the physical device. Scan it with the AgriTech mobile app to provision this hardware to a new Plot.
+        </p>
+
+        <button class="btn-ghost w-full mt-6" @click="showQrModal = false">Close</button>
+      </div>
     </div>
 
     <!-- Test Command Modal -->
@@ -476,7 +516,6 @@ setInterval(load, 5000)
           <label class="block text-xs uppercase tracking-wide text-muted mb-1">Action</label>
           <select v-model="actionChoice" class="input w-full">
             <template v-if="activeDevice.kind === 'actuator'">
-              <!-- Disable options based on current state -->
               <option value="irrigation.start" :disabled="actuatorStates[activeDevice.id]?.pump">
                 Turn Pump ON {{ actuatorStates[activeDevice.id]?.pump ? '(Already Running)' : '' }}
               </option>

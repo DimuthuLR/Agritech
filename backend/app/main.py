@@ -4,7 +4,9 @@ FastAPI application entry point.
 Run locally with:
     ./py.bat -m uvicorn app.main:app --reload --port 8000
 """
+import asyncio  # <--- ADDED THIS
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
@@ -27,6 +29,7 @@ from app.api.v1.users import router as users_router
 from app.api.v1.platform import router as platform_router
 from app.api.v1.iot import router as iot_router
 from app.services.iot_ack_subscriber import subscriber as iot_ack_subscriber
+from app.services.background_worker import run_rule_engine
 
 
 @asynccontextmanager
@@ -45,8 +48,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[startup] WARNING: iot ack subscriber failed to start: {e}")
 
+    # Start the background rule engine as a non-blocking asyncio task
+    worker_task = asyncio.create_task(run_rule_engine())
+    print("[startup] Background rule engine started")
+
     yield
 
+    # Cancel the background task on shutdown
+    worker_task.cancel()
+    
     iot_ack_subscriber.stop()
     print("[shutdown] bye")
 
